@@ -1,6 +1,6 @@
 # Work plan — Directed LLM-guided fuzzing of DuckDB
 
-Status as of 2026-10-10 (rebalanced so the three workloads are about equal). Read `src/README.md` first for how to build and run.
+Status as of 2026-10-10 (rebalanced so the three workloads are within one point). Read `src/README.md` first for how to build and run.
 
 ## 1. Where we are
 
@@ -44,14 +44,14 @@ nobody has reported. The LLM-guided part is what is supposed to get us there.
 
 Each person gets **one core component (hard), three supporting tasks, one share
 of evaluation and one share of the paper**. Effort points: S = 1, M = 2, L = 3
-(about a day, a few days, about a week). Everyone ends up with ~14 points.
+(about a day, a few days, about a week). Everyone ends up with 14-15 points.
 
 | | Niket | Jahnvi | Prabhnoor |
 |---|---|---|---|
 | **Theme** | Execution engine, oracles, baselines, campaigns | Program analysis, coverage gaps, test data | LLM generation and the feedback loop |
 | **Core (L)** | N3 in-process batch driver | J2 hint extraction | P2 generator with validity repair |
 | **Evaluation** | RQ4 bugs found + OSS-Fuzz/SQLsmith baselines | RQ3 effect of static hints | RQ1/RQ2 coverage and valid-query rate |
-| **Points** | 14 | 14 | 14 |
+| **Points** | 15 | 14 | 15 |
 
 ### Who owns which files (review, understand, improve, and be able to explain)
 
@@ -65,11 +65,12 @@ of evaluation and one share of the paper**. Effort points: S = 1, M = 2, L = 3
 
 | Task | File(s) |
 |---|---|
-| N1, N7 | `src/build.sh`, `src/setup.sh` (+ new `Dockerfile`) |
+| N1 | `src/build.sh`, `src/setup.sh` |
 | N2 | `src/build.sh` (add `main` build), `src/harness/triage.py` |
 | N3 | `src/driver/` (new) |
 | N4 | `src/baselines/` (new) |
 | N5 | `src/harness/oracle.py`, `src/harness/sweep_oracle.py` |
+| N8 | `src/harness/sweep_oracle.py`, `src/harness/triage.py`, `src/harness/fuzz.py` (report order) |
 | N6 | `src/harness/campaign.py` (new) |
 | J1, J2 | `src/static/` (new); output format in section 5 |
 | J3 | `src/coverage/cov.py` |
@@ -81,6 +82,7 @@ of evaluation and one share of the paper**. Effort points: S = 1, M = 2, L = 3
 | P2, P3 | `src/llm/` (new), `src/harness/fuzz.py` (`generate` stage) |
 | P4 | `src/llm/prompts/` (new) |
 | P5, P7 | `src/eval/` (new) |
+| P8 | `Dockerfile` or `docs/SETUP.md` (new) |
 | P6 | `paper/HANDOFF.md`, `paper/sections/*.tex` |
 
 Nobody edits another person's file without telling them; ask in the group chat
@@ -96,7 +98,27 @@ or open a small PR.
 | N4 | Baselines under the same time budget: **OSS-Fuzz targets** (see google/oss-fuzz `projects/duckdb`) and **SQLsmith**; record coverage over time with `cov.py` | L | The abstract promises an OSS-Fuzz comparison |
 | N5 | New oracles in `oracle.py`: NoREC and TLP query generators over the seed schemas; wire into `sweep_oracle.py` | M | Logic bugs are our most likely finds |
 | N6 | Campaign runner: long, resumable ASan runs with a time budget and periodic `triage` + `report` | M | Needed for any bug to turn up |
-| N7 | Dockerfile or documented apt list so a clean machine builds in one command | S | Teammates and graders |
+| N8 | **Noise gates** for the sweeps/triage (details in section 4a): determinism gate on frozen data, setup taint tracking, unordered-window filter, by-design error rules, quick mode for timeouts, severity ranking | M | In the first full run 34 of 37 findings were noise; the report must be readable without a human re-checking each one |
+
+### 4a. Details for N8 (noise gates)
+
+Evidence: the first full run triaged 37 findings; **2 were real crashes (both
+already known upstream), 35 were noise**. Files: `src/harness/sweep_oracle.py`
+and `src/harness/triage.py` (a draft of some of these gates was written and
+shelved, ask Prabhnoor for it or start fresh). Required behaviour:
+
+| Gate | Problem it fixes | Example from the run |
+|---|---|---|
+| Determinism gate | Setup built separately per config uses `random()`/`uuid()`, so data differs | `window__test_split_partition_heap` and `index__art__issues__test_art_issue_6799` were "value mismatches" but are identical on the same data |
+| Setup taint tracking | Same, applied earlier in `sweep_oracle.py` so no time is wasted | as above |
+| Unordered-window filter | A window frame with no `ORDER BY` has unspecified row order | `STDDEV_SAMP(k) OVER (ROWS UNBOUNDED PRECEDING)` over `ROLLUP` |
+| By-design error rules | Both configs reject the query (only the error class differs); `BITSTRING_AGG` needs the statistics-propagation pass at bind time; a bind-time error vs an empty result on an empty table | `function__time__test_extract`, `aggregate__aggregates__test_bitstring_agg` |
+| Quick mode for timeouts | A non-reproducing timeout costs 5 configs x 60 s | 3 baseline timeouts cost ~15 min |
+| Severity ranking | Crashes and internal errors must come first, error-vs-ok last | `REPORT.md` order |
+
+A finding that is dropped must print its reason, so nothing disappears
+silently. Acceptance test: re-running triage on the stored sweep output must
+leave only the two known crashes (`merge_into_*`, `asof_join_predicates`).
 
 Deliverable: reproducible builds (v1.5.6 and `main`), baseline coverage numbers,
 a faster driver, and the campaign runner.
@@ -134,6 +156,7 @@ the improved coverage report, and an honest note on precision and limits.
 | P5 | Evaluation harness (`src/eval/`): equal budgets and seeds for (a) mutation baseline, (b) LLM only, (c) LLM + hints; coverage-over-time and valid-query-rate tables and plots | M | RQ1 and RQ2 |
 | P6 | Paper integration: `HANDOFF.md` numbers table, figures, `make check`, anonymity and AI-disclosure checklist | M | Keeps the report consistent |
 | P7 | Metrics logging: per-batch parse/bind/execute rates and coverage gain per query, in one shared JSONL schema used by `eval/` | S | Makes RQ2 measurable and comparable across runs |
+| P8 | Dockerfile or documented apt list so a clean machine builds in one command | S | Teammates and graders |
 
 Deliverable: a working `fuzz.py generate`, the evaluation scripts, and the
 RQ1/RQ2 tables.
@@ -162,8 +185,8 @@ Verify every citation yourself (Crossref/arXiv); no fabricated references.
 |---|---|---|---|
 | 1 (now) | N1, N2 | J1, J5 | P1, P2 (skeleton) |
 | 2 | N3 | J2 | P2, P3 (skeleton) |
-| 3 | N5, N7 | J4, J3 | P3, P4 |
-| 4 | N4 | J6, J3 | P4, P5 |
+| 3 | N5, N8 | J4, J3 | P3, P4 |
+| 4 | N4 | J6, J3 | P4, P5, P8 |
 | 5 | N6 campaigns, triage | J7 | P5 final runs |
 | 6 | paper + data | paper + data | paper + data |
 
