@@ -57,9 +57,31 @@ of evaluation and one share of the paper**. Effort points: S = 1, M = 2, L = 3
 
 | Owner | Files |
 |---|---|
-| Niket | `src/build.sh`, `src/setup.sh`, `src/harness/runner.py`, `src/harness/smoke_test.py`, `src/harness/oracle.py`, `src/harness/sweep_oracle.py`, `src/harness/sweep_seeds.py`, `src/harness/triage.py` |
-| Jahnvi | `src/static/` (new), `src/coverage/cov.py`, `src/harness/extract_seeds.py`, `src/harness/baseline.py`, schema/data generator (new, `src/gen/`) |
-| Prabhnoor | `src/llm/` (new), `src/harness/fuzz.py`, evaluation scripts (new, `src/eval/`) |
+| Niket | `src/build.sh`, `src/setup.sh`, `src/harness/runner.py`, `src/harness/smoke_test.py`, `src/harness/oracle.py`, `src/harness/sweep_oracle.py`, `src/harness/sweep_seeds.py`, `src/harness/triage.py`, `src/harness/campaign.py`, `src/driver/`, `src/baselines/` |
+| Jahnvi | `src/static/`, `src/gen/`, `src/coverage/cov.py`, `src/harness/extract_seeds.py`, `src/harness/baseline.py` |
+| Prabhnoor | `src/llm/`, `src/eval/`, `src/harness/fuzz.py` |
+
+### Where each task lives (skeleton files already exist; replace the stubs)
+
+| Task | File(s) |
+|---|---|
+| N1, N7 | `src/build.sh`, `src/setup.sh` (+ new `Dockerfile`) |
+| N2 | `src/build.sh` (add `main` build), `src/harness/triage.py` |
+| N3 | `src/driver/batch_driver.cpp`, `src/driver/README.md` |
+| N4 | `src/baselines/run_ossfuzz.sh`, `src/baselines/run_sqlsmith.sh` |
+| N5 | `src/harness/oracle.py`, `src/harness/sweep_oracle.py` |
+| N6 | `src/harness/campaign.py` |
+| J1, J2 | `src/static/extract_hints.py`, `src/static/queries/`, `src/static/hints.schema.json` |
+| J3 | `src/coverage/cov.py` |
+| J4 | `src/gen/gen_schemas.py` |
+| J5 | `src/harness/extract_seeds.py` |
+| J6 | `src/harness/baseline.py` |
+| J7 | `src/eval/` (add `hints_eval.py`), results to `paper/data/` |
+| P1 | `src/llm/client.py` |
+| P2, P3 | `src/llm/generate.py`, `src/harness/fuzz.py` (`generate` stage) |
+| P4 | `src/llm/prompts/` |
+| P5, P7 | `src/eval/run_eval.py`, `src/eval/README.md` |
+| P6 | `paper/HANDOFF.md`, `paper/sections/*.tex` |
 
 Nobody edits another person's file without telling them; ask in the group chat
 or open a small PR.
