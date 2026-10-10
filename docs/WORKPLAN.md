@@ -1,6 +1,6 @@
 # Work plan — Directed LLM-guided fuzzing of DuckDB
 
-Status as of 2026-10-10. Read `src/README.md` first for how to build and run.
+Status as of 2026-10-10 (rebalanced so the three workloads are about equal). Read `src/README.md` first for how to build and run.
 
 ## 1. Where we are
 
@@ -40,36 +40,56 @@ nobody has reported. The LLM-guided part is what is supposed to get us there.
   `main` are both fine; do not rewrite shared history.
 - Declare AI-assisted code in the paper's disclosure.
 
-## 3. Niket — build system, sanitizers, driver
+## 3. How the work is split
 
-Owns: `src/build.sh`, `src/setup.sh`, `src/harness/runner.py`,
-`src/harness/smoke_test.py`.
+Each person gets **one core component (hard), three supporting tasks, one share
+of evaluation and one share of the paper**. Effort points: S = 1, M = 2, L = 3
+(about a day, a few days, about a week). Everyone ends up with ~14 points.
 
-| # | Task | Why |
-|---|---|---|
-| N1 | Review and correct the ASan/UBSan and coverage build flags in `build.sh` (are assertions, `-fno-omit-frame-pointer`, `ASAN_OPTIONS`/`UBSAN_OPTIONS`, extension set right?) | Everything runs on these binaries |
-| N2 | Add a build of DuckDB `main` at a pinned commit (`DUCKDB_COMMIT`), so findings are checked against the latest code, not only v1.5.6 | Two of our "bugs" were already fixed on main |
-| N3 | Build an in-process driver (C++ or the C API) that runs many queries per process instead of one CLI process per script | Process start-up dominates run time; needed for long campaigns |
-| N4 | Make the coverage build and ASan build produce comparable results (same flags except instrumentation); document build time and RAM | Reproducibility section of the paper |
-| N5 | Reproduce the **OSS-Fuzz baseline** named in the proposal: find out what DuckDB's OSS-Fuzz targets are (google/oss-fuzz `projects/duckdb`), build and run them for the same time budget, and record coverage | The abstract promises a comparison against OSS-Fuzz |
-| N6 | Add a `Dockerfile` or documented apt list so a clean machine builds in one command | Teammates and graders |
+| | Niket | Jahnvi | Prabhnoor |
+|---|---|---|---|
+| **Theme** | Execution engine, oracles, baselines, campaigns | Program analysis, coverage gaps, test data | LLM generation and the feedback loop |
+| **Core (L)** | N3 in-process batch driver | J2 hint extraction | P2 generator with validity repair |
+| **Evaluation** | RQ4 bugs found + OSS-Fuzz/SQLsmith baselines | RQ3 effect of static hints | RQ1/RQ2 coverage and valid-query rate |
+| **Points** | 14 | 14 | 14 |
 
-Deliverable: a documented, reproducible `./build.sh` for both builds + `main`,
-and baseline coverage numbers from OSS-Fuzz.
+### Who owns which files (review, understand, improve, and be able to explain)
 
-## 4. Jahnvi — static analysis (CodeQL / AST)
+| Owner | Files |
+|---|---|
+| Niket | `src/build.sh`, `src/setup.sh`, `src/harness/runner.py`, `src/harness/smoke_test.py`, `src/harness/oracle.py`, `src/harness/sweep_oracle.py`, `src/harness/sweep_seeds.py`, `src/harness/triage.py` |
+| Jahnvi | `src/static/` (new), `src/coverage/cov.py`, `src/harness/extract_seeds.py`, `src/harness/baseline.py`, schema/data generator (new, `src/gen/`) |
+| Prabhnoor | `src/llm/` (new), `src/harness/fuzz.py`, evaluation scripts (new, `src/eval/`) |
 
-Owns: `src/static/` (currently empty).
+Nobody edits another person's file without telling them; ask in the group chat
+or open a small PR.
 
-| # | Task | Why |
-|---|---|---|
-| J1 | Decide extraction approach: CodeQL database for DuckDB (heavy; may need more than 8 GB RAM, build on a lab machine) or a tree-sitter/clang-AST script as a fallback | CodeQL may not be feasible on every laptop |
-| J2 | Extract **boundary constants and comparisons** (e.g. `STANDARD_VECTOR_SIZE` = 2048, `INT32_MAX`, list/array size limits, `if (x > K)`) with file, line and surrounding code | Prompt material for the LLM |
-| J3 | Extract **risky sinks**: `memcpy`/`memmove`, unchecked indexing, `reinterpret_cast`, `static_cast` of sizes, `D_ASSERT`s | Where memory bugs live |
-| J4 | Restrict to the directories that matter (`src/optimizer`, `src/planner`, `src/execution`, `src/function`, `src/storage`) | Keeps hints useful |
-| J5 | Emit `static/hints.json` using the schema below | Contract with the LLM stage |
-| J6 | Join hints with uncovered regions (`coverage/cov.py` `uncovered_regions()`): rank hints whose lines are *never executed* | This is the "directed" part of the project |
-| J7 | Evaluate: how many hints are in uncovered code, and how many queries reached them | RQ3 in the paper |
+## 4. Niket — execution engine, oracles, baselines, campaigns
+
+| # | Task | Pts | Why |
+|---|---|---|---|
+| N1 | Review ASan/UBSan and coverage flags in `build.sh` (assertions, frame pointers, `ASAN_OPTIONS`/`UBSAN_OPTIONS`, extension set); document build time and RAM | S | Everything runs on these binaries |
+| N2 | Add a build of DuckDB `main` at a pinned commit; add a "reproduces on main?" step to `triage.py` | M | Two of our "bugs" were already fixed on main |
+| N3 | **Core:** in-process batch driver (C API or C++) that runs many scripts per process, with crash isolation and a per-query timeout | L | Process start-up dominates run time; needed for long campaigns |
+| N4 | Baselines under the same time budget: **OSS-Fuzz targets** (see google/oss-fuzz `projects/duckdb`) and **SQLsmith**; record coverage over time with `cov.py` | L | The abstract promises an OSS-Fuzz comparison |
+| N5 | New oracles in `oracle.py`: NoREC and TLP query generators over the seed schemas; wire into `sweep_oracle.py` | M | Logic bugs are our most likely finds |
+| N6 | Campaign runner: long, resumable ASan runs with a time budget and periodic `triage` + `report` | M | Needed for any bug to turn up |
+| N7 | Dockerfile or documented apt list so a clean machine builds in one command | S | Teammates and graders |
+
+Deliverable: reproducible builds (v1.5.6 and `main`), baseline coverage numbers,
+a faster driver, and the campaign runner.
+
+## 5. Jahnvi — program analysis, coverage gaps, test data
+
+| # | Task | Pts | Why |
+|---|---|---|---|
+| J1 | Choose the extraction approach: CodeQL database for DuckDB (heavy, may need a bigger machine) or a tree-sitter/clang-AST fallback | M | CodeQL may not be feasible on every laptop |
+| J2 | **Core:** extract boundary constants, comparisons and risky sinks (`memcpy`, unchecked indexing, casts of sizes, `D_ASSERT`) from `src/optimizer`, `src/planner`, `src/execution`, `src/function`, `src/storage`; emit `static/hints.json` | L | Prompt material for the LLM |
+| J3 | Extend `cov.py`: per-function coverage, rank uncovered regions, join with `hints.json` ("hint lines never executed") | M | This is the "directed" part |
+| J4 | **Schema and data generator** (`src/gen/`): diverse tables (nested STRUCT/LIST/MAP, NULLs, 2047/2048/2049-row sizes, extreme values) as prompt context and fuzz setup | L | The LLM needs realistic schemas; many bugs sit at vector-size boundaries |
+| J5 | Improve `extract_seeds.py`: expand `foreach` loops and `${type}` templating, measure how many statements survive and execute cleanly | M | We currently skip 1,454 of 3,413 test files |
+| J6 | Mutation baseline: better mutators in `baseline.py` (grammar-aware swaps, nested expression wrapping) and a per-mutator effectiveness table | S | Stronger baseline makes the comparison honest |
+| J7 | Evaluate hints: fraction in uncovered code, and how many generated queries reached them | S | RQ3 |
 
 `hints.json` (one object per hint):
 
@@ -78,54 +98,63 @@ Owns: `src/static/` (currently empty).
  "value": "2048", "function": "Foo::Bar", "context": "<5 lines of source>"}
 ```
 
-Deliverable: `static/extract_hints.py` + `static/hints.json` + a short note on
-precision and limits (for Threats to Validity).
+Deliverable: `static/extract_hints.py` + `hints.json`, the schema/data generator,
+the improved coverage report, and an honest note on precision and limits.
 
-## 5. Prabhnoor — LLM orchestration, coverage feedback, campaigns, triage
+## 6. Prabhnoor — LLM generation and the feedback loop
 
-Owns: `src/llm/` (to write), `src/coverage/cov.py`, `src/harness/baseline.py`,
-`src/harness/oracle.py`, `src/harness/triage.py`, `src/harness/fuzz.py`,
-`src/harness/sweep_*.py`.
+| # | Task | Pts | Why |
+|---|---|---|---|
+| P1 | `llm/client.py`: provider-agnostic client for a **local** model (OpenAI-compatible URL, e.g. Ollama), URL/model from env | S | Model runs on another machine; no paid API |
+| P2 | **Core:** `llm/generate.py`: prompt builder (schema + uncovered region + hint + examples), batch SQL output, `EXPLAIN` validity check with one repair retry, save to `corpus/llm/<run>/` | L | Central contribution |
+| P3 | Feedback loop: run generated SQL on the coverage build, merge, recompute uncovered regions, re-prompt; add `generate` stage to `fuzz.py` | L | "Directed" generation |
+| P4 | Prompt strategy experiments: region-focused vs feature-focused, few-shot examples, temperature, batch size | M | Which prompts actually add coverage |
+| P5 | Evaluation harness (`src/eval/`): equal budgets and seeds for (a) mutation baseline, (b) LLM only, (c) LLM + hints; coverage-over-time and valid-query-rate tables and plots | M | RQ1 and RQ2 |
+| P6 | Paper integration: `HANDOFF.md` numbers table, figures, `make check`, anonymity and AI-disclosure checklist | M | Keeps the report consistent |
+| P7 | Metrics logging: per-batch parse/bind/execute rates and coverage gain per query, in one shared JSONL schema used by `eval/` | S | Makes RQ2 measurable and comparable across runs |
 
-| # | Task | Why |
+Deliverable: a working `fuzz.py generate`, the evaluation scripts, and the
+RQ1/RQ2 tables.
+
+## 7. Paper sections (equal shares)
+
+| Section | Lead | Also contributes |
 |---|---|---|
-| P1 | `llm/client.py`: provider-agnostic client for a **local** model (OpenAI-compatible URL, e.g. Ollama), URL and model from env/config | Local model runs on another machine; no paid API |
-| P2 | `llm/generate.py`: prompt = schema DDL + uncovered code region (+ hint) + examples; output = batch of SQL; `EXPLAIN` validity check with one repair retry; save to `corpus/llm/<run>/` | Core contribution |
-| P3 | Coverage feedback loop: run generated SQL on the coverage build, merge with `cov.py`, recompute uncovered regions, re-prompt | "Directed" generation |
-| P4 | Per-optimizer fuzz mode: run generated queries under each single-optimizer disable + TLP/NoREC-style metamorphic checks | Upstream's CI mostly replays existing tests; novel queries here are our best shot |
-| P5 | Campaign runner: long unattended runs on the ASan build, resumable, with time/budget logging | Needed for any bug to turn up |
-| P6 | Evaluation harness: equal time budget and seeds for (a) mutation baseline, (b) LLM only, (c) LLM + hints; log coverage over time and valid-query rate | RQ1–RQ3 |
-| P7 | Triage upgrades: statement-level text minimisation, "test on main" check, GitHub rate-limit handling | Cuts manual work |
+| Introduction + motivating example (must be real) | Prabhnoor | all |
+| Background + Related work: DBMS fuzzers (SQLsmith, SQLancer, OSS-Fuzz) | Niket | |
+| Related work: static analysis for directed fuzzing | Jahnvi | |
+| Related work: LLM-based fuzzing/test generation | Prabhnoor | |
+| Approach / workflow figure | Jahnvi | Prabhnoor |
+| Implementation + setup/reproducibility | Niket | |
+| Evaluation: RQ1/RQ2 | Prabhnoor | |
+| Evaluation: RQ3 (hints) | Jahnvi | |
+| Evaluation: RQ4 (bugs, baselines) | Niket | |
+| Threats to validity | each writes the threats of their own component | |
+| Abstract / conclusion | rotates; final edit by all | |
 
-Deliverable: `fuzz.py` stage `generate` that plugs into the existing
-triage/report path, plus the evaluation tables in `paper/data/`.
+Verify every citation yourself (Crossref/arXiv); no fabricated references.
 
-## 6. Shared tasks
-
-| Task | Who |
-|---|---|
-| Fill `paper/HANDOFF.md` (venue, deadline, numbers table) | all, each owns their numbers |
-| Motivating example (must be real, exact numbers) | Prabhnoor, using a confirmed finding or the coverage-gap example |
-| Related work (verify every citation) | Jahnvi (static analysis, directed fuzzing), Prabhnoor (LLM fuzzing), Niket (DBMS fuzzers: SQLsmith, SQLancer, OSS-Fuzz) |
-| Threats to validity | all |
-| Weekly 30-minute sync; re-check upstream for duplicates before any report | all |
-
-## 7. Suggested order (6 weeks, adjust to the real deadline)
+## 8. Timeline (adjust to the real deadline)
 
 | Week | Niket | Jahnvi | Prabhnoor |
 |---|---|---|---|
-| 1 (now) | N1, N2 | J1, J2 | P1, P2 skeleton |
-| 2 | N3 | J3, J4, J5 | P2, P3 |
-| 3 | N4, N5 | J6 | P4, P6 baseline numbers |
-| 4 | N5 results, N6 | J7 | P5 campaigns |
-| 5 | triage and report any finding | evaluation text | P6 final runs, P7 |
-| 6 | paper | paper | paper, data to `paper/data/` |
+| 1 (now) | N1, N2 | J1, J5 | P1, P2 (skeleton) |
+| 2 | N3 | J2 | P2, P3 (skeleton) |
+| 3 | N5, N7 | J4, J3 | P3, P4 |
+| 4 | N4 | J6, J3 | P4, P5 |
+| 5 | N6 campaigns, triage | J7 | P5 final runs |
+| 6 | paper + data | paper + data | paper + data |
 
-## 8. Interfaces (do not change without telling the others)
+Also in week 1, everybody: run `fuzz.py all --limit 100` once and read
+`results/REPORT.md`, so each person understands the whole pipeline and can
+explain it in the final presentation.
 
-| From → To | Format |
+## 9. Interfaces (do not change without telling the others)
+
+| From -> To | Format |
 |---|---|
-| Static analysis → LLM stage | `static/hints.json`, schema in section 4 |
-| Build → everyone | `$FUZZ_WORK/build-asan/duckdb`, `$FUZZ_WORK/build-cov/duckdb` (CLI binaries) |
-| LLM stage → triage | SQL files under `$FUZZ_WORK/corpus/llm/<run>/*.sql` |
-| Sweeps → triage → report | `results/*.jsonl` → `results/triage/<id>/meta.json` → `results/REPORT.md` |
+| Static analysis -> LLM stage | `static/hints.json`, schema in section 5 |
+| Schema generator -> LLM stage and fuzzing | SQL DDL files in `src/gen/out/*.sql` |
+| Build -> everyone | `$FUZZ_WORK/build-asan/duckdb`, `$FUZZ_WORK/build-cov/duckdb`, `$FUZZ_WORK/build-main/duckdb` |
+| LLM stage -> triage | SQL files under `$FUZZ_WORK/corpus/llm/<run>/*.sql` |
+| Sweeps -> triage -> report | `results/*.jsonl` -> `results/triage/<id>/meta.json` -> `results/REPORT.md` |
