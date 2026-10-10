@@ -1,0 +1,14 @@
+# DuckDB source is pinned by DUCKDB_VERSION; builds and run outputs are regenerable
+duckdb/
+build-asan/
+build-cov/
+.venv/
+__pycache__/
+*.profraw
+*.profdata
+corpus/seeds/
+results/*.log
+results/*.jsonl
+results/cov*/
+crashes/*.log
+.env
