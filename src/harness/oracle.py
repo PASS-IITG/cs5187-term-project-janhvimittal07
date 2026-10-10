@@ -51,7 +51,9 @@ def _norm(v):
     if isinstance(v, float):
         if math.isnan(v):
             return "NaN"
-        return round(v, 6)
+        if math.isinf(v):
+            return v
+        return float(f"{v:.7g}")      # 7 significant digits: tolerate summation-order noise
     if isinstance(v, (list, tuple)):
         return tuple(_norm(x) for x in v)
     if isinstance(v, dict):

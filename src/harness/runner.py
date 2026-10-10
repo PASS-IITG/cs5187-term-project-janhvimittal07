@@ -9,7 +9,6 @@ import hashlib
 import os
 import re
 import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -100,19 +99,17 @@ def run_sql(sql: str, build: str = "asan", timeout: float = 30.0,
     env.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0:symbolize=1")
     env.setdefault("UBSAN_OPTIONS", "print_stacktrace=1")
     env.update(env_extra or {})
-    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False) as f:
-        f.write(sql)
-        path = f.name
+    # NOTE: feed SQL on stdin, not -f: the shell aborts a -f script at its first
+    # error but keeps going on stdin, which is what a fuzzing batch needs.
     try:
-        p = subprocess.run([str(exe), db or ":memory:", "-init", "/dev/null", "-f", path],
+        p = subprocess.run([str(exe), db or ":memory:", "-init", "/dev/null"], input=sql,
                            capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd,
                            errors="replace")
         return classify(p.returncode, p.stdout, p.stderr)
     except subprocess.TimeoutExpired as e:
-        return Result("timeout", -1, (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""),
-                      "timeout", signature="timeout:" + hashlib.sha1(sql.encode()).hexdigest()[:12])
-    finally:
-        Path(path).unlink(missing_ok=True)
+        out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        return Result("timeout", -1, out, "timeout",
+                      signature="timeout:" + hashlib.sha1(sql.encode()).hexdigest()[:12])
 
 
 def split_statements(sql: str) -> list[str]:
