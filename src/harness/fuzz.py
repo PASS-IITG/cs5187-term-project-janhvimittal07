@@ -123,36 +123,72 @@ def stage_triage(max_items: int) -> None:
 
 def stage_report() -> Path:
     items = []
-    for m in sorted((triage.OUT).glob("*/meta.json")):
+    for m in sorted(triage.OUT.glob("*/meta.json")):
         items.append(json.loads(m.read_text()))
+
     order = {"no-match": 0, "similar-found": 1, "duplicate-likely": 2}
-    items.sort(key=lambda f: (order.get(f["upstream"]["verdict"], 1), f["kind"]))
-    lines = [f"# Fuzzing report — {time.strftime('%Y-%m-%d %H:%M')}", "",
-             f"{len(items)} triaged findings. Sorted: candidate-new first, likely-duplicates last.",
-             "Verdicts come from an automatic upstream issue/PR search; confirm manually before reporting.", ""]
-    lines += ["| id | kind | config | optimizers | stmts | stock build | upstream |", "|---|---|---|---|---|---|---|"]
+    items.sort(key=lambda f: (
+        order.get(f.get("upstream", {}).get("verdict", "untriaged"), 3),
+        f.get("kind", "")
+    ))
+
+    lines = [
+        f"# Fuzzing report — {time.strftime('%Y-%m-%d %H:%M')}",
+        "",
+        f"{len(items)} saved findings; findings without upstream metadata are marked untriaged.",
+        "Automatic upstream matches require manual confirmation.",
+        "",
+        "| id | kind | config | optimizers | stmts | stock build | upstream |",
+        "|---|---|---|---|---|---|---|"
+    ]
+
     for f in items:
-        st = f["stock_build"]
-        lines.append(f"| {f['id']} | {f['kind']}/{f['outcome']} | {f['config']} | "
-                     f"{','.join(f['disabled_optimizers']) or '-'} | {f['n_statements']} | "
-                     f"{'yes' if st.get('reproduces') else 'no'} | {f['upstream']['verdict']} |")
+        upstream = f.get("upstream") or {}
+        st = f.get("stock_build") or {}
+        lines.append(
+            f"| {f.get('id', '-')} | {f.get('kind', '-')}/{f.get('outcome', '-')} | "
+            f"{f.get('config', '-')} | "
+            f"{','.join(f.get('disabled_optimizers') or []) or '-'} | "
+            f"{f.get('n_statements', '-')} | "
+            f"{'yes' if st.get('reproduces') else 'no' if st else 'unknown'} | "
+            f"{upstream.get('verdict', 'untriaged')} |"
+        )
+
     for f in items:
-        lines += ["", f"## {f['id']} — {f['kind']} ({f['upstream']['verdict']})", "",
-                  f"Origin: `{f['origin']}`  ", f"Outcome: `{f['outcome']}`  signature `{f['signature']}`  ",
-                  f"Config: `{f['config']}`  disabled optimizers: `{','.join(f['disabled_optimizers']) or '-'}`", "",
-                  "```sql", (triage.prelude(triage.disable(f["disabled_optimizers"]) if f["disabled_optimizers"]
-                                           else triage.CFG.get(f["config"], []))
-                            + "\n".join(f["minimal_sql"])), "```", ""]
-        if f["error_core"]:
-            lines.append(f"Error: `{' '.join(f['error_core'])}`  ")
-        for m in f["upstream"]["matches"][:5]:
-            lines.append(f"- {'**' if m.get('strong') else ''}#{m['number']} [{m['kind']}/{m['state']}] "
-                         f"{m['title']}{'**' if m.get('strong') else ''} — {m['url']}")
+        upstream = f.get("upstream") or {}
+        disabled = f.get("disabled_optimizers") or []
+        config = f.get("config", "")
+        setup = triage.disable(disabled) if disabled else triage.CFG.get(config, [])
+        lines += [
+            "",
+            f"## {f.get('id', '-')} — {f.get('kind', '-')} "
+            f"({upstream.get('verdict', 'untriaged')})",
+            "",
+            f"Origin: `{f.get('origin', '-')}`",
+            f"Outcome: `{f.get('outcome', '-')}`; signature `{f.get('signature', '-')}`",
+            f"Config: `{config}`; disabled optimizers: `{','.join(disabled) or '-'}`",
+            "",
+            "```sql",
+            triage.prelude(setup) + "\n".join(f.get("minimal_sql") or []),
+            "```",
+            ""
+        ]
+
+        if f.get("error_core"):
+            lines.append(f"Error: `{' '.join(f['error_core'])}`")
+
+        for m in upstream.get("matches", [])[:5]:
+            lines.append(
+                f"- {'**' if m.get('strong') else ''}#{m.get('number', '?')} "
+                f"[{m.get('kind', '?')}/{m.get('state', '?')}] "
+                f"{m.get('title', '')}{'**' if m.get('strong') else ''} — {m.get('url', '')}"
+            )
+
     out = RES / "REPORT.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n")
     print(f"report: {out}", flush=True)
     return out
-
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

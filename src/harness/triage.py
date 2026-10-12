@@ -1,162 +1,324 @@
-#!/usr/bin/env python3
-"""Compare a SQL reproducer on the ASan build and pinned DuckDB main."""
+"""Automatic triage of fuzzing findings.
 
-import argparse
+Given a failing SQL script (or a differential mismatch) this:
+  1. finds the config under which it fails (threads / ordering / optimizers),
+  2. minimises the statements (delta debugging),
+  3. minimises the set of disabled optimizers,
+  4. confirms on the stock release build (python `duckdb`),
+  5. searches upstream issues and PRs (and diffs fix PRs) for duplicates.
+
+    python harness/triage.py crash  path/to/script.sql
+    python harness/triage.py replay            (internal: stock-build child)
+
+Library: triage_crash(stmts, origin), triage_value(setup, query, kind, differs, origin)
+"""
+from __future__ import annotations
+
 import hashlib
 import json
-import os
-import shutil
+import re
 import subprocess
+import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import oracle  # noqa: E402
+import runner  # noqa: E402
 
-def classify(returncode, stdout, stderr, timed_out=False):
-    text = (stdout + "\n" + stderr).lower()
+WORK = runner.WORK
+OUT = WORK / "results" / "triage"
+CRASHY = {"internal_error", "asan", "crash"}
+CFG = {**oracle.CONFIGS, **oracle.PER_OPTIMIZER}
+CRASH_ORDER = ["default", "single_thread", "many_threads", "no_insertion_order", "no_optimizers"]
+REPO = "duckdb/duckdb"
 
-    if timed_out:
-        return "timeout"
-    if "addresssanitizer" in text or "undefinedbehaviorsanitizer" in text:
-        return "asan"
-    if returncode < 0:
-        return "crash"
-    if "internal error" in text or "fatal error" in text:
-        return "internal_error"
-    if "parser error" in text or "syntax error" in text:
-        return "parse_error"
-    if "binder error" in text or "catalog error" in text:
-        return "binder_error"
-    if "error:" in text or "exception" in text or returncode != 0:
-        return "runtime_error"
-    return "ok"
+FEATURES = ["NOT MATCHED BY SOURCE", "WHEN NOT MATCHED", "WHEN MATCHED", "ON CONFLICT", "GROUP BY ALL",
+            "ORDER BY ALL", "IS NOT DISTINCT FROM", "GROUPING SETS", "ROWS BETWEEN", "RANGE BETWEEN",
+            "ASOF", "MERGE", "PIVOT", "UNPIVOT", "UNNEST", "RECURSIVE", "QUALIFY", "LATERAL",
+            "ROLLUP", "CUBE", "GROUPING", "WINDOW", "STRUCT", "MAP", "UNION", "JSON", "COPY",
+            "EXPLAIN", "INTERSECT", "EXCEPT", "SAMPLE", "PREPARE", "PARQUET", "CSV", "UPSERT",
+            "CONFLICT", "RETURNING", "ENUM", "DECIMAL", "ARRAY", "LIST", "INDEX", "MACRO",
+            "SEQUENCE", "ATTACH", "FILTER", "DISTINCT", "DELETE", "UPDATE", "INSERT", "JOIN"]
 
 
-def run_query(binary, sql, timeout):
-    start = time.monotonic()
+# ---------------------------------------------------------------- running
+def prelude(cfg_stmts: list[str]) -> str:
+    return "".join(s.strip().rstrip(";") + ";\n" for s in cfg_stmts)
 
+
+def disable(opts: list[str]) -> list[str]:
+    return [f"SET disabled_optimizers='{','.join(opts)}'"] if opts else []
+
+
+def cli(stmts: list[str], cfg_stmts: list[str], timeout: float = 60) -> runner.Result:
+    return runner.run_sql(prelude(cfg_stmts) + "\n".join(stmts) + "\n", "asan", timeout,
+                          cwd=WORK / "duckdb")
+
+
+def stock_replay(stmts: list[str], pre_a: list[str], pre_b: list[str] | None = None,
+                 timeout: float = 90) -> dict:
+    """Run on the stock python build in a child process; returns rc + per-side outcome."""
+    payload = json.dumps({"stmts": stmts, "pre_a": pre_a, "pre_b": pre_b})
     try:
-        result = subprocess.run(
-            [str(binary), "-c", sql],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        stdout = result.stdout
-        stderr = result.stderr
-        returncode = result.returncode
-        timed_out = False
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        returncode = None
-        timed_out = True
-
-    return {
-        "binary": str(binary),
-        "returncode": returncode,
-        "outcome": classify(
-            returncode if returncode is not None else -999,
-            stdout,
-            stderr,
-            timed_out,
-        ),
-        "timed_out": timed_out,
-        "duration_seconds": round(time.monotonic() - start, 3),
-        "stdout": stdout,
-        "stderr": stderr,
-    }
+        p = subprocess.run([sys.executable, __file__, "replay"], input=payload, capture_output=True,
+                           text=True, timeout=timeout, cwd=WORK / "duckdb")
+    except subprocess.TimeoutExpired:
+        return {"rc": None, "timeout": True}
+    out = {"rc": p.returncode, "segfault": p.returncode in (-11, 139)}
+    try:
+        out.update(json.loads(p.stdout.strip().splitlines()[-1]))
+    except Exception:                              # noqa: BLE001
+        pass
+    return out
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Check whether a SQL finding reproduces on pinned DuckDB main."
-    )
-    parser.add_argument("sql_file", help="SQL reproducer file")
-    parser.add_argument(
-        "--asan",
-        default=os.path.expanduser("~/fuzzwork/build-asan/duckdb"),
-    )
-    parser.add_argument(
-        "--main",
-        default=os.path.expanduser("~/fuzzwork/build-main/duckdb"),
-    )
-    parser.add_argument("--timeout", type=float, default=10.0)
-    parser.add_argument(
-        "--out",
-        default=os.path.expanduser("~/fuzzwork/results/triage"),
-    )
-    args = parser.parse_args()
+def _replay_child() -> None:
+    import duckdb
+    d = json.load(sys.stdin)
 
-    sql_path = Path(args.sql_file).expanduser().resolve()
-    asan = Path(args.asan).expanduser().resolve()
-    main_binary = Path(args.main).expanduser().resolve()
+    def side(pre):
+        c = duckdb.connect(":memory:")
+        classes, last = [], None
+        try:
+            for s in pre:
+                c.execute(s)
+            n = len(d["stmts"])
+            for i, s in enumerate(d["stmts"]):
+                try:
+                    cur = c.execute(s)
+                    if i == n - 1:
+                        rows = [oracle._norm(r) for r in cur.fetchall()]
+                        last = ["ok", sorted(repr(r) for r in rows)]
+                except Exception as e:             # noqa: BLE001
+                    classes.append(type(e).__name__)
+                    if i == n - 1:
+                        last = ["error", type(e).__name__]
+        finally:
+            c.close()
+        return {"classes": classes, "last": last}
 
-    if not sql_path.is_file():
-        parser.error(f"SQL file not found: {sql_path}")
+    res = {"a": side(d["pre_a"])}
+    if d.get("pre_b") is not None:
+        res["b"] = side(d["pre_b"])
+    print(json.dumps(res))
 
-    for binary in (asan, main_binary):
-        if not binary.is_file() or not os.access(binary, os.X_OK):
-            parser.error(f"Executable missing or not executable: {binary}")
 
-    if args.timeout <= 0:
-        parser.error("--timeout must be positive")
+# ---------------------------------------------------------------- minimising
+def ddmin(items: list, test) -> list:
+    n = 2
+    while len(items) >= 2:
+        chunk = max(1, len(items) // n)
+        reduced = False
+        for i in range(0, len(items), chunk):
+            cand = items[:i] + items[i + chunk:]
+            if cand and test(cand):
+                items, n, reduced = cand, max(n - 1, 2), True
+                break
+        if not reduced:
+            if chunk == 1:
+                break
+            n = min(len(items), n * 2)
+    return items
 
-    sql = sql_path.read_text(encoding="utf-8")
-    digest = hashlib.sha256(sql.encode("utf-8")).hexdigest()
-    finding_id = digest[:12]
-    out_dir = Path(args.out).expanduser().resolve() / finding_id
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    shutil.copy2(sql_path, out_dir / "reproducer.sql")
-    asan_result = run_query(asan, sql, args.timeout)
-    main_result = run_query(main_binary, sql, args.timeout)
+def min_optimizers(test, opts: list[str]) -> list[str]:
+    cur = list(opts)
+    for o in list(cur):
+        t = [x for x in cur if x != o]
+        if t and test(t):
+            cur = t
+    return cur
 
-    interesting = {"asan", "crash", "internal_error", "timeout"}
-    reproduces = (
-        asan_result["outcome"] in interesting
-        and main_result["outcome"] == asan_result["outcome"]
-    )
 
-    record = {
-        "finding_id": finding_id,
-        "sql_sha256": digest,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "timeout_seconds": args.timeout,
-        "asan": asan_result,
-        "main": main_result,
-        "same_outcome": asan_result["outcome"] == main_result["outcome"],
-        "reproduces_on_main": reproduces,
-        "note": (
-            "Automatic classification is a triage signal, not proof of a bug. "
-            "Review logs and reproduce again before reporting."
-        ),
-    }
+# ---------------------------------------------------------------- upstream search
+def _gh(args: list[str], timeout: float = 60):
+    try:
+        p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+        return json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else None
+    except Exception:                              # noqa: BLE001
+        return None
 
-    for label, result in (("asan", asan_result), ("main", main_result)):
-        (out_dir / f"{label}.stdout.txt").write_text(
-            result["stdout"], encoding="utf-8"
-        )
-        (out_dir / f"{label}.stderr.txt").write_text(
-            result["stderr"], encoding="utf-8"
-        )
 
-    (out_dir / "meta.json").write_text(
-        json.dumps(record, indent=2) + "\n", encoding="utf-8"
-    )
+def _toks(s: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z_][a-z0-9_]{2,}", s.lower())}
 
-    print(json.dumps({
-        "finding_id": finding_id,
-        "asan_outcome": asan_result["outcome"],
-        "main_outcome": main_result["outcome"],
-        "reproduces_on_main": reproduces,
-        "artifacts": str(out_dir),
-    }, indent=2))
+
+def err_core(res: runner.Result | None) -> list[str]:
+    if res is None:
+        return []
+    text = res.stderr + res.stdout
+    m = re.search(r"INTERNAL Error: ([^\n]+)", text) or re.search(r"(Assertion[^\n]+)", text)
+    if m:
+        words = re.findall(r"[A-Za-z_]{4,}", re.sub(r'"[^"]*"', " ", m.group(1)))
+        return words[:8]
+    frames = re.findall(r"#\d+ 0x[0-9a-f]+ in (?:duckdb::)?([A-Za-z_:~]+)", text)
+    return [f.split("::")[-1] for f in frames[:3]]
+
+
+_CACHE = WORK / "results" / "upstream_cache.json"
+
+
+def _cached(key: str, fn):
+    try:
+        c = json.loads(_CACHE.read_text()) if _CACHE.exists() else {}
+    except Exception:                              # noqa: BLE001
+        c = {}
+    if key not in c:
+        c[key] = fn()
+        _CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE.write_text(json.dumps(c))
+    return c[key]
+
+
+CRASH_WORDS = ("sigsegv", "segmentation", "segfault", "null pointer", "nullptr", "heap-buffer",
+               "use-after", "asan", "ubsan", "addresssanitizer", "stack-overflow", "abort")
+
+
+def _score(hay: str, kws: list[str], opts: list[str], core: list[str], outcome: str) -> int:
+    hay = hay.lower()
+    pts = min(2, sum(k.lower() in hay for k in kws))
+    pts += 2 * any(o.lower() in hay for o in opts)
+    pts += "disable" in hay and bool(opts)
+    pts += bool(core) and sum(w.lower() in hay for w in core) >= max(2, len(core) // 2)
+    if outcome in ("asan", "crash"):
+        pts += any(w in hay for w in CRASH_WORDS)
+    elif outcome == "internal_error":
+        pts += "internal error" in hay
+    return int(pts)
+
+
+def upstream_search(sql: list[str], opts: list[str], core: list[str], outcome: str = "") -> dict:
+    """Find duplicate issues/PRs. strong = shares a feature keyword and scores >= 3."""
+    text = " ".join(sql)
+    kws = [k for k in FEATURES if re.search(rf"\b{k.replace(' ', r'\s+')}\b", text, re.I)][:3]
+    crashw = ["crash", "segfault"] if outcome in ("asan", "crash") else ["INTERNAL Error"]
+    queries: list[str] = []
+    for k in kws[:2]:
+        queries += [f"{k} {w}" for w in crashw]
+        queries += [f"{k} {o}" for o in opts[:3]]
+        queries.append(f"{k} disabled optimizer")
+    if core:
+        queries.append(" ".join(core[:5]))
+    queries = list(dict.fromkeys(queries))[:10]
+    bag = _toks(" ".join(queries + opts + kws))
+    hits: dict[int, dict] = {}
+    for q in queries:
+        for kind in ("issues", "prs"):
+            rows = _cached(f"{kind}|{q}", lambda: _gh(["search", kind, "--repo", REPO, q, "--limit", "8",
+                           "--json", "number,title,state,createdAt,url"]) or []) or []
+            for r in rows:
+                r = dict(r, kind="pr" if kind == "prs" else "issue")
+                r["tscore"] = len(_toks(r["title"]) & bag)
+                if r["number"] not in hits or hits[r["number"]]["tscore"] < r["tscore"]:
+                    hits[r["number"]] = r
+    ranked = sorted(hits.values(), key=lambda r: -r["tscore"])[:8]
+    for r in ranked[:6]:
+        def fetch(r=r):
+            if r["kind"] == "pr":
+                d = _gh(["pr", "view", str(r["number"]), "--repo", REPO, "--json", "body"]) or {}
+                try:
+                    diff = subprocess.run(["gh", "pr", "diff", str(r["number"]), "--repo", REPO],
+                                          capture_output=True, text=True, timeout=90).stdout
+                except Exception:                  # noqa: BLE001
+                    diff = ""
+                return (d.get("body") or "") + "\n" + r["title"] + "\n" + diff[:60000]
+            d = _gh(["issue", "view", str(r["number"]), "--repo", REPO, "--json", "body"]) or {}
+            return r["title"] + "\n" + (d.get("body") or "")
+        hay = _cached(f"text|{r['kind']}|{r['number']}", fetch) or ""
+        r["score"] = _score(hay, kws, opts, core, outcome)
+        r["kw_hit"] = any(k.lower() in hay.lower() for k in kws)
+        r["strong"] = bool(r["kw_hit"] and r["score"] >= 3)
+    ranked.sort(key=lambda r: (-int(r.get("strong", False)), -r.get("score", 0), -r["tscore"]))
+    verdict = ("duplicate-likely" if any(r.get("strong") for r in ranked)
+               else "similar-found" if any(r.get("score", 0) >= 2 for r in ranked) else "no-match")
+    return {"verdict": verdict, "queries": queries, "matches": ranked}
+
+
+# ---------------------------------------------------------------- triage entry points
+def _finish(kind: str, sql: list[str], cfg_name: str, opts: list[str], res, stock: dict,
+            origin: str, extra: dict) -> dict:
+    core = err_core(res)
+    sig_src = (res.signature if res is not None and res.signature else
+               kind + "|" + "|".join(sql[-3:]) + "|" + ",".join(opts))
+    sid = hashlib.sha1(sig_src.encode()).hexdigest()[:10]
+    up = upstream_search(sql, opts, core, res.outcome if res is not None else "")
+    f = {"id": sid, "kind": kind, "origin": origin, "config": cfg_name, "disabled_optimizers": opts,
+         "minimal_sql": sql, "outcome": res.outcome if res is not None else "value_mismatch",
+         "signature": res.signature if res is not None else "", "error_core": core,
+         "stock_build": stock, "upstream": up, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **extra}
+    d = OUT / sid
+    d.mkdir(parents=True, exist_ok=True)
+    cfgstmts = disable(opts) if opts else CFG.get(cfg_name, [])
+    (d / "repro.sql").write_text(prelude(cfgstmts) + "\n".join(sql) + "\n")
+    (d / "meta.json").write_text(json.dumps(f, indent=1, default=str))
+    if res is not None:
+        (d / "stderr.txt").write_text(res.stderr[-6000:])
+    return f
+
+
+def triage_crash(stmts: list[str], origin: str = "") -> dict | None:
+    for name in CRASH_ORDER:
+        r = cli(stmts, CFG[name])
+        if r.outcome in CRASHY:
+            break
+    else:
+        return None
+    sig, cfg_name = r.signature, name
+
+    def same(sub, cfg):
+        return cli(sub, cfg).signature == sig
+
+    cfg = CFG[cfg_name]
+    mn = ddmin(list(stmts), lambda sub: same(sub, cfg))
+    opts: list[str] = []
+    if cfg_name == "no_optimizers":
+        opts = min_optimizers(lambda o: same(mn, disable(o)), list(oracle.OPTIMIZERS))
+        cfg = disable(opts)
+        mn = ddmin(mn, lambda sub: same(sub, cfg))
+    final = cli(mn, cfg)
+    stock = stock_replay(mn, cfg)
+    stock["reproduces"] = bool(stock.get("segfault") or
+                               "InternalException" in (stock.get("a") or {}).get("classes", []))
+    return _finish("crash", mn, cfg_name, opts, final, stock, origin, {"n_statements": len(mn)})
+
+
+def triage_value(setup: list[str], query: str, kind: str, differs: list[str],
+                 origin: str = "") -> dict | None:
+    stmts = setup + [query]
+
+    def bad(sub, cfg_b):
+        r = stock_replay(sub, [], cfg_b)
+        a, b = (r.get("a") or {}).get("last"), (r.get("b") or {}).get("last")
+        if not a or not b:
+            return False
+        if kind == "value":
+            return a[0] == "ok" and b[0] == "ok" and a[1] != b[1]
+        return a[0] != b[0] or (a[0] == "error" and a[1] != b[1])
+
+    cfg_name = next((n for n in differs if n in CFG and bad(stmts, CFG[n])), None)
+    if cfg_name is None:
+        return None
+    cfg = CFG[cfg_name]
+    mn_setup = ddmin(list(setup), lambda s: bad(s + [query], cfg)) if setup else []
+    opts: list[str] = []
+    if cfg_name == "no_optimizers":
+        opts = min_optimizers(lambda o: bad(mn_setup + [query], disable(o)), list(oracle.OPTIMIZERS))
+    final = mn_setup + [query]
+    r = stock_replay(final, [], disable(opts) if opts else cfg)
+    stock = {"reproduces": True, "a": r.get("a"), "b": r.get("b")}
+    return _finish(kind, final, cfg_name, opts, None, stock, origin, {"n_statements": len(final)})
+
+
+def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] == "replay":
+        _replay_child()
+    elif len(sys.argv) >= 3 and sys.argv[1] == "crash":
+        stmts = runner.split_statements(Path(sys.argv[2]).read_text(errors="replace"))
+        f = triage_crash(stmts, sys.argv[2])
+        print(json.dumps(f, indent=1, default=str) if f else "did not reproduce")
+    else:
+        print(__doc__)
 
 
 if __name__ == "__main__":
