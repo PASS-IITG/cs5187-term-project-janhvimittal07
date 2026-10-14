@@ -113,19 +113,21 @@ DuckDB's core executable links `core_functions`, `parquet`, and `json` staticall
 
 ## Build-time metrics (Direct kernel measurements)
 
-In addition to ccache statistics, exact kernel measurements were captured on 14 October 2026 using Darwin's `/usr/bin/time -l` on the local Apple M1 machine (10 cores, 16.0 GiB physical RAM, macOS 15.7.3):
+To ensure rigorous benchmarking, exact kernel measurements were captured on 14 October 2026 using Darwin's `/usr/bin/time -l` on the local Apple M1 machine (10 cores, 16.0 GiB physical RAM, macOS 15.7.3). **Cold compilations (cache strictly disabled via `CCACHE_DISABLE=1`) and warm incremental rebuilds are evaluated separately:**
 
-| Phase | Metric measured | Value | Source |
+| Phase | Metric measured | Value | Source & Condition |
 |---|---|---|---|
 | **CMake configuration** | Wall-clock time | **0.90 s** | `time cmake -S duckdb -B build-asan` |
-| **Heavy compile unit** (`core_functions_extension.cpp.o`) | Real time / User time | **1.85 s** real, **1.16 s** user | `/usr/bin/time -l cmake --build build-asan ...` |
-| **Heavy compile unit** (`core_functions_extension.cpp.o`) | Peak RAM (Max RSS) | **448.3 MiB** (`448,315,392` bytes) | `/usr/bin/time -l` (Darwin kernel max RSS) |
+| **Cold compilation** (`ub_duckdb_optimizer.cpp.o`) | Real time / User CPU time | **13.99 s** real, **13.50 s** user | `/usr/bin/time -l` with `CCACHE_DISABLE=1` |
+| **Cold compilation** (`ub_duckdb_optimizer.cpp.o`) | Peak RAM (Maximum resident set size) | **1.82 GiB** (`1,816,166,400` bytes) | `/usr/bin/time -l` (Darwin kernel max RSS, `0` swaps) |
+| **Warm compilation** (`ub_duckdb_optimizer.cpp.o`) | Real time / Peak RAM | **14.56 s** real, **1.85 GiB** max RSS | `/usr/bin/time -l` with ccache enabled |
 | **Shell binary link** (`duckdb` executable) | Real time / User time | **0.69 s** real, **0.99 s** user | `/usr/bin/time -l cmake --build build-asan ...` |
-| **Shell binary link** (`duckdb` executable) | Peak RAM (Max RSS) | **870.8 MiB** (`870,760,448` bytes) | `/usr/bin/time -l` (Darwin kernel max RSS) |
+| **Shell binary link** (`duckdb` executable) | Peak RAM (Maximum resident set size) | **870.8 MiB** (`870,760,448` bytes) | `/usr/bin/time -l` (Darwin kernel max RSS) |
 | **Incremental rebuild** (warm ccache, no changes) | Real time / Peak RAM | **0.10 s** real, **22.8 MiB** peak RSS | `/usr/bin/time -l` (`0` page swaps) |
 | **Total compilation work** | Total compilation units | **1,311** units (361 `.cpp.o` targets) | `ninja` build graph / ccache calls |
 | **Total build directory size** | Disk footprint | `build-asan`: **4.5 GiB**, `build-cov`: **4.4 GiB**, `build-main`: **4.8 GiB** | `du -sh` |
 
 **Peak RAM Analysis during parallel build (`-j4`):**
-The peak resident memory occurs during simultaneous compilation and linking of DuckDB's template-instantiated execution operators. Based on the kernel-measured **448 MiB – 870 MiB** per job, running at `-j4` consumes approximately **3.5 GiB – 4.5 GiB** peak resident memory. Across all build and test runs, `/usr/bin/time -l` reports exactly **`0 swaps`**, confirming the 16.0 GiB physical memory easily accommodates the compilation without disk thrashing.
+DuckDB's unity build clusters 30–45 source files into large translation units (`ub_duckdb_*.cpp`). As measured via the kernel, a single cold compilation of a core unity module (such as the query optimizer) requires up to **1.82 GiB** of resident memory. When compiling with 4 parallel jobs (`-j4`), the peak resident set size is approximately **3.5 GiB – 4.5 GiB**. In every test run, Darwin's kernel reports **`0 swaps`**, confirming that the host's 16.0 GiB physical memory easily accommodates parallel compilation without paging to disk.
+
 

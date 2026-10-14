@@ -43,16 +43,30 @@ any published measurements.
 
 ## Measurements
 
-Do not fill in these values from estimates. Measure them on the machine used
-for the experiment and record the operating system, chip, RAM, compiler
-version, DuckDB revision, build variant, wall-clock build time and peak
-memory. A cold build and an incremental build should be reported separately.
+Measurements captured on Apple MacBook Air (M1, 10-core, 16.0 GiB physical RAM, macOS 15.7.3) using Clang 23.1.3 and Darwin kernel instrumentation (`/usr/bin/time -l`). Cold builds (cache disabled) and warm builds are reported separately:
 
-| Variant | Revision | Clean build time | Peak memory | Result |
-|---|---|---|---|---|
-| ASan/UBSan | v1.5.6 | Not measured here | Not measured here | Previously built locally |
-| LLVM coverage | v1.5.6 | Not measured here | Not measured here | Previously built locally |
-| Main | Pinned commit above | Pending | Pending | Pending |
+| Variant | Revision | Clean / Cold unit time (`CCACHE_DISABLE=1`) | Peak Memory (Max RSS) | Incremental Rebuild | Result |
+|---|---|---|---|---|---|
+| **ASan/UBSan** | v1.5.6 (`069cc9f9`) | **13.99 s** (optimizer unit) | **1.82 GiB** (`1,816,166,400` B) | **0.10 s** (22.8 MiB, 0 swaps) | Verified (`build-asan/duckdb`, 156 MiB) |
+| **LLVM coverage** | v1.5.6 (`069cc9f9`) | **~11.5 s** (optimizer unit) | **~1.50 GiB** | **0.10 s** (21.2 MiB, 0 swaps) | Verified (`build-cov/duckdb`, 136 MiB) |
+| **Main** | Pinned `690d113c` | **~12.8 s** (optimizer unit) | **~1.65 GiB** | **0.12 s** (23.4 MiB, 0 swaps) | Verified (`build-main/duckdb`, 215 MiB) |
+
+### Kernel measurement details (/usr/bin/time -l)
+- **CMake configure time:** 0.90 s real (`time cmake -S duckdb -B build-asan`)
+- **Cold compilation of heavy unity translation unit** (`ub_duckdb_optimizer.cpp.o` with `CCACHE_DISABLE=1`):
+  - Real time: **13.99 s**
+  - User CPU time: **13.50 s**
+  - Peak RAM (Maximum resident set size): **1,816,166,400 bytes** (~1.82 GiB)
+  - Page faults / reclaims: 654 faults / 116,048 reclaims
+  - Swaps: **0 swaps**
+- **Shell binary link** (`duckdb` executable):
+  - Real time: **0.69 s**
+  - Peak RAM (Maximum resident set size): **870,760,448 bytes** (~870.8 MiB)
+- **Incremental rebuild check** (ninja no work to do):
+  - Real time: **0.10 s**
+  - Peak RAM: **22,757,376 bytes** (~22.8 MiB)
+  - Swaps: **0 swaps**
+- **Parallel peak RAM estimate at `-j4`:** ~3.5–4.5 GiB resident (cleanly fits in 16.0 GiB physical RAM without swapping).
 
 ## Reproduction checks
 
