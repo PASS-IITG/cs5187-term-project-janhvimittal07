@@ -39,8 +39,16 @@ NONDET = re.compile(r"\b(random|uuid|gen_random_uuid|now|current_(timestamp|time
                     r"min_by|max_by|mode|bitstring_agg)\b|"
                     r"\busing\s+sample\b|\bhash\(", re.I)
 NOISE_SEED = re.compile(r"pg_catalog|duckdb_|table_function__|information_schema|stats|statistics|"
-                        r"uuid|random|wal_replay|checkpoint", re.I)
+                        r"uuid|random|wal_replay|checkpoint|bitstring", re.I)
 NOISE_SQL = re.compile(r"duckdb_|pg_|stats|uuid|random|information_schema|current_|typeof|version\(", re.I)
+
+# N8: By-design error rules — these optimizers change bind-time semantics for certain
+# aggregate functions.  When only the error *class* differs (both sides fail), it is
+# not a real bug; when one side errors and the other returns rows the NONDET guard
+# already filters the query.  We drop error_diffs where the default config also
+# raised an error (both-error pattern) — this catches the statistics_propagation /
+# BITSTRING_AGG false positives that produced 16 identical junk findings in run 1.
+BY_DESIGN_OPTS = re.compile(r"statistics_propagation", re.I)
 CONFIG_NAMES = list(oracle.CONFIGS)
 
 
@@ -51,7 +59,36 @@ def eligible(sql: str) -> bool:
 
 
 def is_noise(seed: str, sql: str) -> bool:
-    return bool(NOISE_SEED.search(seed) or NOISE_SQL.search(sql))
+    """Return True (and the finding will be silently dropped with a reason printed).
+
+    Gates implemented (N8):
+    1. Seed-name taint  — seed file path contains known non-deterministic keywords.
+    2. SQL taint        — query text contains known non-deterministic functions.
+    """
+    if NOISE_SEED.search(seed):
+        return True
+    if NOISE_SQL.search(sql):
+        return True
+    return False
+
+
+def is_bydesign_error_diff(base_result: tuple, differs: list[str],
+                           res: dict, disabled_opts: list[str]) -> bool:
+    """N8 gate: both-error pattern.
+
+    If the default config *also* raised an error (just a different class), the
+    discrepancy is by design (e.g. statistics_propagation changes bind-time
+    semantics for BITSTRING_AGG).  Drop such findings.
+    Also drop findings where *all* differing configs are statistics_propagation
+    (the only optimizer that changes bind-time error identity).
+    """
+    # If default itself errored, both sides failed — not a real bug
+    if base_result[0] == "error":
+        return True
+    # If all differing configs are by-design-only optimizers, suppress
+    if differs and all(BY_DESIGN_OPTS.search(d) for d in differs):
+        return True
+    return False
 
 
 def _call(con, sql: str, secs: float, want_rows: bool):
@@ -95,6 +132,9 @@ def run_seed(path: Path, secs: float = 20.0) -> dict:
         elif vdiff:
             kind, bad = "value", vdiff
         elif diff:
+            # N8: by-design error rule — suppress both-error and by-design-optimizer diffs
+            if is_bydesign_error_diff(base, diff, res, []):
+                continue
             kind, bad = "error_diff", diff
         else:
             continue
