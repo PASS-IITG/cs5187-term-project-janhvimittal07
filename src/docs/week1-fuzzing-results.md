@@ -17,7 +17,7 @@
 - **Report stage:** Final summary table rendered with the `main build` verification column in `~/fuzzwork/results/REPORT.md`.
 
 ## Workflow status
-The complete `python harness/fuzz.py all --limit 100` pipeline executed from start to finish without interruption. All stages (`seeds`, `sweep`, `baseline`, `triage`, `report`) succeeded cleanly.
+The complete `python harness/fuzz.py all --limit 100` pipeline executed from start to finish without interruption in **610 seconds** (~10 minutes). All stages (`seeds`, `sweep`, `baseline`, `triage`, `report`) succeeded cleanly.
 
 ## Existing artifacts
 - `~/fuzzwork/results/sweep-asan.jsonl`
