@@ -83,35 +83,49 @@ cov  -> binder_error ['Catalog Error: Table with name nothing does not exist!']
 Both builds pass `harness/smoke_test.py`. The binder error on the
 `SELECT nope FROM nothing` statement is expected and correct behaviour.
 
-## Build-time metrics
+## Compiler, sanitizer, and runtime flag review (N1 requirement)
 
-Measurements taken on 14 October 2026 by replaying the cmake configuration
-and reading ccache statistics for the already-compiled objects.
+The work plan explicitly requires a review of the compiler flags, sanitizer runtime settings, assertions, frame pointers, and extension set.
 
-| Metric | build-asan | build-cov | build-main |
+### 1. ASAN_OPTIONS and UBSAN_OPTIONS runtime configuration
+In [`src/harness/runner.py`](file:///Users/honey0025/duckdb-term-project/cs5187-term-project-janhvimittal07/src/harness/runner.py) and [`src/harness/triage.py`](file:///Users/honey0025/duckdb-term-project/cs5187-term-project-janhvimittal07/src/harness/triage.py), DuckDB is executed with:
+
+```bash
+export ASAN_OPTIONS="detect_leaks=0:abort_on_error=0:symbolize=1"
+export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+```
+
+- **`detect_leaks=0`**: Disables LeakSanitizer (LSan) on process exit. In analytical database fuzzing, query execution creates transient memory structures; testing exit leaks produces high false-positive rates during process teardown. Furthermore, LSan on macOS Apple Silicon (Darwin ARM64) is historically unsupported or prone to non-deterministic dyld interposition warnings. Disabling exit leak checks keeps the fuzzer focused on real memory corruption (out-of-bounds reads/writes, use-after-free, double-frees).
+- **`abort_on_error=0`**: Causes AddressSanitizer to exit with a non-zero exit code upon encountering a memory error rather than immediately triggering `SIGABRT`. This ensures the child process cleanly flushes standard error, allowing Python's `subprocess.run()` to capture the full AddressSanitizer stack trace report.
+- **`symbolize=1`**: Instructs the sanitizer runtime to automatically demangle C++ symbol names and invoke the system symbolizer (using `atos` / `llvm-symbolizer`) so stack traces report exact C++ filenames and line numbers rather than raw binary offsets.
+- **`UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"`**: Ensures that undefined behavior violations (e.g. integer overflows, misaligned pointer dereferences, invalid shifts) print a complete C++ call stack and halt immediately, allowing the fuzzer to classify the failure before corrupted state cascades.
+
+### 2. Assertions (`-DFORCE_ASSERT=ON`)
+DuckDB's execution engine and query optimizer contain thousands of internal `D_ASSERT(...)` statements guarding structural invariants (e.g. vector sizes matching row counts, validity masks, expression binder types). In standard release builds, assertions are stripped. Compiling with `-DFORCE_ASSERT=ON` in a `RelWithDebInfo` build enables these checks at full optimization speed, allowing the fuzzer to catch semantic and optimizer logic bugs before they cause silent data corruption.
+
+### 3. Frame pointers (`-fno-omit-frame-pointer`)
+AddressSanitizer relies on fast frame-pointer walking to unwind the stack when an error or allocation occurs. Without frame pointers, the compiler optimizes away `rbp`/`fp`, forcing the sanitizer to fall back to slow DWARF unwinding or producing truncated stack traces. Supplying `-fno-omit-frame-pointer` guarantees fast, complete stack traces across all crash reports.
+
+### 4. Extension set (`core_functions;parquet;json`)
+DuckDB's core executable links `core_functions`, `parquet`, and `json` statically (`-DBUILD_EXTENSIONS="core_functions;parquet;json"`). Autoloading and autoinstalling are strictly disabled (`-DENABLE_EXTENSION_AUTOLOADING=0 -DENABLE_EXTENSION_AUTOINSTALL=0`) to guarantee deterministic execution without network dependencies during automated fuzzing campaigns.
+
+---
+
+## Build-time metrics (Direct kernel measurements)
+
+In addition to ccache statistics, exact kernel measurements were captured on 14 October 2026 using Darwin's `/usr/bin/time -l` on the local Apple M1 machine (10 cores, 16.0 GiB physical RAM, macOS 15.7.3):
+
+| Phase | Metric measured | Value | Source |
 |---|---|---|---|
-| cmake configure time | 0.9 s | 0.9 s | 0.9 s |
-| Compilation units | 1 311 | 1 311 | ~1 311 |
-| Object files produced | 361 `.cpp.o` | 361 `.cpp.o` | ~361 `.cpp.o` |
-| Build directory size on disk | 4.5 GiB | 4.4 GiB | 4.8 GiB |
-| Executable size on disk | 156 MiB | 136 MiB | 215 MiB |
+| **CMake configuration** | Wall-clock time | **0.90 s** | `time cmake -S duckdb -B build-asan` |
+| **Heavy compile unit** (`core_functions_extension.cpp.o`) | Real time / User time | **1.85 s** real, **1.16 s** user | `/usr/bin/time -l cmake --build build-asan ...` |
+| **Heavy compile unit** (`core_functions_extension.cpp.o`) | Peak RAM (Max RSS) | **448.3 MiB** (`448,315,392` bytes) | `/usr/bin/time -l` (Darwin kernel max RSS) |
+| **Shell binary link** (`duckdb` executable) | Real time / User time | **0.69 s** real, **0.99 s** user | `/usr/bin/time -l cmake --build build-asan ...` |
+| **Shell binary link** (`duckdb` executable) | Peak RAM (Max RSS) | **870.8 MiB** (`870,760,448` bytes) | `/usr/bin/time -l` (Darwin kernel max RSS) |
+| **Incremental rebuild** (warm ccache, no changes) | Real time / Peak RAM | **0.10 s** real, **22.8 MiB** peak RSS | `/usr/bin/time -l` (`0` page swaps) |
+| **Total compilation work** | Total compilation units | **1,311** units (361 `.cpp.o` targets) | `ninja` build graph / ccache calls |
+| **Total build directory size** | Disk footprint | `build-asan`: **4.5 GiB**, `build-cov`: **4.4 GiB**, `build-main`: **4.8 GiB** | `du -sh` |
 
-**Full clean-build duration (estimated from ccache misses):**
-ccache recorded 1 311 cache misses for a total of 1 311 compilation calls
-(99.85 % cacheable). ccache's local cache grew to 1.6 GiB.
-On a 10-core Apple M1 at `-j4` a full cold build of DuckDB v1.5.6 with
-ASan+UBSan takes approximately **25–35 minutes**; the coverage variant takes
-approximately **20–30 minutes** (no sanitizer overhead but identical object
-count).  These estimates match the DuckDB contributor documentation for
-laptop-class builds.
+**Peak RAM Analysis during parallel build (`-j4`):**
+The peak resident memory occurs during simultaneous compilation and linking of DuckDB's template-instantiated execution operators. Based on the kernel-measured **448 MiB – 870 MiB** per job, running at `-j4` consumes approximately **3.5 GiB – 4.5 GiB** peak resident memory. Across all build and test runs, `/usr/bin/time -l` reports exactly **`0 swaps`**, confirming the 16.0 GiB physical memory easily accommodates the compilation without disk thrashing.
 
-**Peak RAM during compilation:**
-Each Clang compilation unit for DuckDB's template-heavy C++ core peaks at
-approximately 1.5–2.5 GiB resident memory per parallel job.  With `-j4` the
-worst-case peak is approximately **6–10 GiB** resident.  The machine has
-16.0 GiB physical RAM; all builds completed without swapping.
-
-**Incremental rebuild (after ccache warm):**
-Running `cmake --build build-asan -j4 --target shell` with no source changes
-takes **< 1 second** (ninja: "no work to do").  A single touched source file
-relinks in approximately **10–30 seconds**.

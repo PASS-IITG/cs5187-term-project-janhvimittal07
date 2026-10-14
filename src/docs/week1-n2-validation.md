@@ -31,7 +31,7 @@ Without an automated check against DuckDB's latest development branch (`main`), 
 ## 3. Validation Cases
 
 ### Case A: The Motivating ASOF Join (#26300 / PR #26301)
-- **SQL Reproducer:**
+- **SQL Reproducer:** [`~/fuzzwork/reproducers/asof_issue_26300.sql`](file:///Users/honey0025/fuzzwork/reproducers/asof_issue_26300.sql)
   ```sql
   SET disabled_optimizers='join_order';
   CREATE TABLE tt1 (i INTEGER, j VARCHAR);
@@ -40,12 +40,14 @@ Without an automated check against DuckDB's latest development branch (`main`), 
   INSERT INTO tt2 VALUES (1, 'A', 'I'), (3, 'B', 'II');
   SELECT tt1.i, tt2.k FROM tt1 ASOF JOIN tt2 ON (tt1.j = tt2.j OR tt1.j = tt2.j) AND tt1.i >= tt2.i ORDER BY tt1.i;
   ```
-- **v1.5.6 (Unpatched):** Triggered `SIGSEGV` in optimizer join ordering.
-- **Pinned `main` (`690d113c`):** Exits cleanly with code 0.
-- **Triage classification:** `reproduces_on_main = false` (Fixed upstream).
+- **Checker Finding ID:** `66e9b71aec30`
+- **Triage command:** `python harness/main_triage.py ~/fuzzwork/reproducers/asof_issue_26300.sql`
+- **Pinned `main` (`690d113c`):** Exits cleanly with code 0 (Duration: 0.396s).
+- **Triage classification:** `reproduces_on_main = false` (Fixed upstream via PR #26301).
+- **Evidence directory:** `~/fuzzwork/results/triage/66e9b71aec30/` (`meta.json`, `asan.stdout.txt`, `main.stdout.txt`).
 
 ### Case B: MERGE INTO (`WHEN NOT MATCHED BY SOURCE` / PR #26715)
-- **SQL Reproducer:**
+- **SQL Reproducer:** [`~/fuzzwork/reproducers/merge_pr_26715.sql`](file:///Users/honey0025/fuzzwork/reproducers/merge_pr_26715.sql)
   ```sql
   SET disabled_optimizers='build_side_probe_side';
   CREATE TABLE Stock(item_id int, balance int);
@@ -55,7 +57,11 @@ Without an automated check against DuckDB's latest development branch (`main`), 
   WHEN NOT MATCHED BY TARGET THEN INSERT
   WHEN NOT MATCHED BY SOURCE THEN DELETE;
   ```
-- **Context:** Exercises complex rowid binding when probe-side optimizer passes are disabled.
+- **Checker Finding ID:** `8f40c8d27385`
+- **Triage command:** `python harness/main_triage.py ~/fuzzwork/reproducers/merge_pr_26715.sql`
+- **Pinned `main` (`690d113c`):** Exits cleanly with code 0 (Duration: 0.153s).
+- **Triage classification:** `reproduces_on_main = false` (No crash on pinned main).
+- **Evidence directory:** `~/fuzzwork/results/triage/8f40c8d27385/` (`meta.json`, `asan.stdout.txt`, `main.stdout.txt`).
 
 ### Case C: Automated Pipeline Integration Test (`results/triage/0c5a16d788`)
 - **Saved finding tested:** `results/triage/0c5a16d788/repro.sql`
