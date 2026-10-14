@@ -1,0 +1,68 @@
+{
+  "total_hints": 24816,
+  "instrumented_hints": 24065,
+  "hit_hints": 4587,
+  "missed_hints": 19478,
+  "uninstrumented_hints": 751,
+  "hit_rate_pct": 19.06,
+  "by_kind": {
+    "branch": {
+      "total": 12580,
+      "hit": 2601,
+      "miss": 9780,
+      "uninst": 199,
+      "hit_pct": 21.01
+    },
+    "magic_const": {
+      "total": 9845,
+      "hit": 1494,
+      "miss": 7900,
+      "uninst": 451,
+      "hit_pct": 15.9
+    },
+    "sink": {
+      "total": 2391,
+      "hit": 492,
+      "miss": 1798,
+      "uninst": 101,
+      "hit_pct": 21.48
+    }
+  },
+  "by_subsystem": {
+    "src/execution": {
+      "total": 6871,
+      "hit": 1155,
+      "miss": 5542,
+      "uninst": 174,
+      "hit_pct": 17.25
+    },
+    "src/function": {
+      "total": 5817,
+      "hit": 678,
+      "miss": 5033,
+      "uninst": 106,
+      "hit_pct": 11.87
+    },
+    "src/optimizer": {
+      "total": 3455,
+      "hit": 1092,
+      "miss": 2329,
+      "uninst": 34,
+      "hit_pct": 31.92
+    },
+    "src/planner": {
+      "total": 2787,
+      "hit": 782,
+      "miss": 1949,
+      "uninst": 56,
+      "hit_pct": 28.63
+    },
+    "src/storage": {
+      "total": 5886,
+      "hit": 880,
+      "miss": 4625,
+      "uninst": 381,
+      "hit_pct": 15.99
+    }
+  }
+}

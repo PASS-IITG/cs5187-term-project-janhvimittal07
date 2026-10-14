@@ -1,0 +1,6 @@
+subsystem,total,instrumented,hit,missed,uninstrumented,hit_pct
+src/execution,6871,6697,1155,5542,174,17.25
+src/function,5817,5711,678,5033,106,11.87
+src/optimizer,3455,3421,1092,2329,34,31.92
+src/planner,2787,2731,782,1949,56,28.63
+src/storage,5886,5505,880,4625,381,15.99

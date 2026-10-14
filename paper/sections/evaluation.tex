@@ -16,7 +16,7 @@ We ask \todo{n} questions.
 \begin{itemize}
   \item[\rqref{1}] \todo{Question?}
   \item[\rqref{2}] \todo{Question, compared with simpler baselines?}
-  \item[\rqref{3}] \todo{Does it change what tools/users get?}
+  \item[\rqref{3}] Do static boundary hints identify uncovered code regions and risky program sinks?
   \item[\rqref{4}] What does \tool cost in time \todo{and resources}?
 \end{itemize}
 
@@ -38,6 +38,7 @@ We select \todo{n} subjects with the following criteria:
 \subsection{Measurements}
 \begin{description}
   \item[\rqref{1}.] \todo{What exactly is measured.}
+  \item[\rqref{3}.] Fraction of extracted static boundary hints located on lines uncovered by the baseline seed corpus, broken down by category and subsystem.
 \end{description}
 
 \subsection{Setup}
@@ -51,4 +52,26 @@ We select \todo{n} subjects with the following criteria:
 \begin{observation}
 \label{obs:first}
 \todo{One claim, with the number that supports it.}
+\end{observation}
+
+\subsection{\rqref{3}: Static Boundary Hints in Uncovered Code}
+\label{sec:rq3}
+
+\input{tables/tab_rq3_hints}
+
+Table~\ref{tab:rq3_hints} reports the distribution and execution status of static boundary hints across the five core DuckDB subsystems.
+Our static analysis extracted 24{,}816 hints across 818 C++ source files (187{,}969 lines of code).
+Of these hints, 24{,}065 reside on lines with compiler coverage instrumentation.
+The baseline seed corpus executes 4{,}587 of these hints (19.1\%).
+The remaining 19{,}478 hints (80.9\%) sit on lines never reached by the seed corpus.
+
+Looking across hint categories, 1{,}798 of 2{,}290 instrumented sinks (78.5\%) remain unexecuted.
+These unexecuted sinks include assertion checks (\texttt{D\_ASSERT}), memory copies (\texttt{memcpy}), and numeric downcasts.
+Similarly, 9{,}780 of 12{,}381 comparison branches (79.0\%) and 7{,}900 of 9{,}394 boundary constants (84.1\%) remain unexecuted.
+Across subsystems, coverage of hints ranges from 11.9\% in \texttt{function} to 31.9\% in \texttt{optimizer}.
+Because four-fifths of all static boundary hints sit in unexecuted code, they provide concrete targets for directed query generation.
+
+\begin{observation}
+\label{obs:rq3_hints}
+Static analysis identified 24{,}065 instrumented boundary hints across DuckDB. The baseline seed corpus leaves 19{,}478 of these hints (80.9\%) unexecuted, including 1{,}798 unreached program sinks.
 \end{observation}

@@ -26,11 +26,18 @@ TODO: problem, what the tool does, main result so far.
 
 ## 4. Numbers in the paper and their sources
 
-Reference environment: TODO (machine, OS, compiler/tool versions).
+Reference environment: Ubuntu 24.04 LTS (x86_64, 20 vCPU, 7.4 GB RAM), Clang 18.1.3, CMake 3.28.3, Ninja 1.11.1, Python 3.12.3, DuckDB v1.5.6.
 
 | Claim | Value | Source file |
 |---|---|---|
-| TODO | | |
+| Total static hints extracted from DuckDB core | 24{,}816 | `paper/data/rq3_hints_summary.json` |
+| Instrumented static hints | 24{,}065 | `paper/data/rq3_hints_summary.json` |
+| Hints executed by baseline seed corpus | 4{,}587 (19.1\%) | `paper/data/rq3_hints_summary.json` |
+| Hints unexecuted (uncovered) by seed corpus | 19{,}478 (80.9\%) | `paper/data/rq3_hints_summary.json` |
+| Unexecuted program sinks (D_ASSERT, memcpy, casts) | 1{,}798 (78.5\% of sinks) | `paper/data/rq3_hints_by_kind.csv` |
+| Unexecuted comparison branches | 9{,}780 (79.0\% of branches) | `paper/data/rq3_hints_by_kind.csv` |
+| Unexecuted boundary constants | 7{,}900 (84.1\% of constants) | `paper/data/rq3_hints_by_kind.csv` |
+| Core subsystems scanned (files / lines) | 818 files / 187{,}969 LOC | `src/static/APPROACH.md` |
 
 ## 5. Open decisions (ask the authors)
 

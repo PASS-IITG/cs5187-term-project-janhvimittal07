@@ -1,0 +1,4 @@
+kind,total,instrumented,hit,missed,uninstrumented,hit_pct
+branch,12580,12381,2601,9780,199,21.01
+magic_const,9845,9394,1494,7900,451,15.9
+sink,2391,2290,492,1798,101,21.48
