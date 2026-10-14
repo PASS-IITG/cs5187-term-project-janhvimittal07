@@ -5,7 +5,9 @@ Given a failing SQL script (or a differential mismatch) this:
   2. minimises the statements (delta debugging),
   3. minimises the set of disabled optimizers,
   4. confirms on the stock release build (python `duckdb`),
-  5. searches upstream issues and PRs (and diffs fix PRs) for duplicates.
+  5. searches upstream issues and PRs (and diffs fix PRs) for duplicates,
+  6. checks whether the finding reproduces on the pinned DuckDB main CLI
+     binary (`build-main/duckdb`) — N2 deliverable.
 
     python harness/triage.py crash  path/to/script.sql
     python harness/triage.py replay            (internal: stock-build child)
@@ -32,6 +34,9 @@ CRASHY = {"internal_error", "asan", "crash"}
 CFG = {**oracle.CONFIGS, **oracle.PER_OPTIMIZER}
 CRASH_ORDER = ["default", "single_thread", "many_threads", "no_insertion_order", "no_optimizers"]
 REPO = "duckdb/duckdb"
+
+# N2: pinned DuckDB main CLI binary for "reproduces on main?" check.
+MAIN_BIN = WORK / "build-main" / "duckdb"
 
 FEATURES = ["NOT MATCHED BY SOURCE", "WHEN NOT MATCHED", "WHEN MATCHED", "ON CONFLICT", "GROUP BY ALL",
             "ORDER BY ALL", "IS NOT DISTINCT FROM", "GROUPING SETS", "ROWS BETWEEN", "RANGE BETWEEN",
@@ -236,6 +241,47 @@ def upstream_search(sql: list[str], opts: list[str], core: list[str], outcome: s
 
 
 # ---------------------------------------------------------------- triage entry points
+def _check_on_main(sql: list[str], cfg_stmts: list[str], timeout: float = 30.0) -> dict:
+    """N2: Run the minimised SQL on the pinned build-main/duckdb binary.
+
+    Returns a dict with keys: outcome, reproduces_on_main, duration_s, available.
+    If the binary does not exist the check is skipped (available=False).
+    """
+    if not MAIN_BIN.exists():
+        return {"available": False, "outcome": None, "reproduces_on_main": None, "duration_s": None}
+    import os as _os
+    import time as _time
+    env = dict(_os.environ)
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0")
+    script = prelude(cfg_stmts) + "\n".join(sql) + "\n"
+    t0 = _time.monotonic()
+    try:
+        p = subprocess.run(
+            [str(MAIN_BIN), ":memory:", "-init", "/dev/null"],
+            input=script, capture_output=True, text=True,
+            timeout=timeout, env=env, errors="replace",
+        )
+        rc, stdout, stderr = p.returncode, p.stdout, p.stderr
+        timed_out = False
+    except subprocess.TimeoutExpired as e:
+        rc = -1
+        stdout = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = "timeout"
+        timed_out = True
+    dur = round(_time.monotonic() - t0, 2)
+    # classify using the same logic as runner
+    main_res = runner.classify(rc, stdout, stderr)
+    reproduces = main_res.outcome in CRASHY and not timed_out
+    return {
+        "available": True,
+        "binary": str(MAIN_BIN),
+        "outcome": main_res.outcome,
+        "reproduces_on_main": reproduces,
+        "duration_s": dur,
+        "timed_out": timed_out,
+    }
+
+
 def _finish(kind: str, sql: list[str], cfg_name: str, opts: list[str], res, stock: dict,
             origin: str, extra: dict) -> dict:
     core = err_core(res)
@@ -243,13 +289,16 @@ def _finish(kind: str, sql: list[str], cfg_name: str, opts: list[str], res, stoc
                kind + "|" + "|".join(sql[-3:]) + "|" + ",".join(opts))
     sid = hashlib.sha1(sig_src.encode()).hexdigest()[:10]
     up = upstream_search(sql, opts, core, res.outcome if res is not None else "")
+    # N2: check whether this finding reproduces on the pinned main build.
+    cfgstmts = disable(opts) if opts else CFG.get(cfg_name, [])
+    main_build = _check_on_main(sql, cfgstmts)
     f = {"id": sid, "kind": kind, "origin": origin, "config": cfg_name, "disabled_optimizers": opts,
          "minimal_sql": sql, "outcome": res.outcome if res is not None else "value_mismatch",
          "signature": res.signature if res is not None else "", "error_core": core,
-         "stock_build": stock, "upstream": up, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **extra}
+         "stock_build": stock, "main_build": main_build,
+         "upstream": up, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **extra}
     d = OUT / sid
     d.mkdir(parents=True, exist_ok=True)
-    cfgstmts = disable(opts) if opts else CFG.get(cfg_name, [])
     (d / "repro.sql").write_text(prelude(cfgstmts) + "\n".join(sql) + "\n")
     (d / "meta.json").write_text(json.dumps(f, indent=1, default=str))
     if res is not None:

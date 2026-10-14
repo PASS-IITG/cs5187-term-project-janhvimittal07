@@ -138,19 +138,21 @@ def stage_report() -> Path:
         f"{len(items)} saved findings; findings without upstream metadata are marked untriaged.",
         "Automatic upstream matches require manual confirmation.",
         "",
-        "| id | kind | config | optimizers | stmts | stock build | upstream |",
-        "|---|---|---|---|---|---|---|"
+        "| id | kind | config | optimizers | stmts | stock build | main build | upstream |",
+        "|---|---|---|---|---|---|---|---|"
     ]
 
     for f in items:
         upstream = f.get("upstream") or {}
         st = f.get("stock_build") or {}
+        mb = f.get("main_build") or {}
         lines.append(
             f"| {f.get('id', '-')} | {f.get('kind', '-')}/{f.get('outcome', '-')} | "
             f"{f.get('config', '-')} | "
             f"{','.join(f.get('disabled_optimizers') or []) or '-'} | "
             f"{f.get('n_statements', '-')} | "
             f"{'yes' if st.get('reproduces') else 'no' if st else 'unknown'} | "
+            f"{'yes' if mb.get('reproduces_on_main') else 'no' if mb.get('available') else 'n/a'} | "
             f"{upstream.get('verdict', 'untriaged')} |"
         )
 
@@ -167,6 +169,15 @@ def stage_report() -> Path:
             f"Origin: `{f.get('origin', '-')}`",
             f"Outcome: `{f.get('outcome', '-')}`; signature `{f.get('signature', '-')}`",
             f"Config: `{config}`; disabled optimizers: `{','.join(disabled) or '-'}`",
+        ]
+        # N2: show pinned-main result
+        mb = f.get("main_build") or {}
+        if mb.get("available"):
+            lines.append(
+                f"Pinned-main ({triage.MAIN_BIN.name}): outcome=`{mb.get('outcome', '-')}` "
+                f"reproduces={mb.get('reproduces_on_main', '-')} ({mb.get('duration_s', '-')}s)"
+            )
+        lines += [
             "",
             "```sql",
             triage.prelude(setup) + "\n".join(f.get("minimal_sql") or []),
