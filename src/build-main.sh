@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="${FUZZ_WORK:-$(cd "$(dirname "$0")" && pwd)}"
 SRC="$ROOT/duckdb-main"
 BUILD="$ROOT/build-main"
-COMMIT="690d113c24dad3b37529c1518354bcbe00d8ffbc"
+COMMIT="${DUCKDB_COMMIT:-690d113c24dad3b37529c1518354bcbe00d8ffbc}"
 EXT="core_functions;parquet;json"
 
 export PATH="/opt/homebrew/opt/llvm/bin:$PATH"

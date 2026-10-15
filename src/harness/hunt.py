@@ -28,6 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import devcheck  # noqa: E402
 import extract_seeds  # noqa: E402
 import oracle  # noqa: E402
 import runner  # noqa: E402
@@ -35,6 +36,7 @@ import triage  # noqa: E402
 
 WORK = runner.WORK
 OUT = WORK / "results" / "hunt"
+ENGINE = "asan"          # "asan" = ASan CLI build, "dev" = newest published dev wheel
 VERIFY = "PRAGMA enable_verification"
 ALL_OPTS = oracle.OPTIMIZERS
 
@@ -86,9 +88,26 @@ def prelude(cfg: list[str]) -> str:
     return "".join(s.rstrip().rstrip(";") + ";\n" for s in cfg)
 
 
+def _msg_sig(kind: str, msg: str) -> str:
+    return f"{kind}:" + hashlib.sha1(re.sub(r"\d+", "N", msg[:240]).encode()).hexdigest()[:12]
+
+
 def run_one(name: str, script: str, cfg_name: str, cfg: list[str], timeout: float = 60.0) -> dict:
     if not hasattr(_tls, "tmp"):
         _tls.tmp = tempfile.mkdtemp(prefix="hunt_tmp_")
+    if ENGINE == "dev":
+        r = devcheck.run_script(script, [s.rstrip().rstrip(";") for s in cfg] +
+                                [f"SET temp_directory='{_tls.tmp}'"], timeout)
+        outcome = r["outcome"]
+        err = next((m for c, m in r.get("errors", []) if c == "InternalException" or VERIFY_RX.search(m)), "")
+        if outcome in ("internal_error", "verify_diff"):
+            sig = _msg_sig(outcome, err)
+        elif outcome == "crash":
+            sig = "crash:" + hashlib.sha1((name + cfg_name).encode()).hexdigest()[:12]
+        else:
+            sig = ""
+        return {"script": name, "config": cfg_name, "outcome": outcome, "sig": sig,
+                "tail": err[-700:] if outcome in CRASHY else ""}
     sql = prelude(cfg + [f"SET temp_directory='{_tls.tmp}'"]) + script
     r = runner.run_sql(sql, "asan", timeout, cwd=WORK / "duckdb")
     text = r.stderr + "\n" + r.stdout
@@ -153,7 +172,27 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--passes", default="1,2")
     ap.add_argument("--max-min", type=int, default=40, help="max unique hits to minimise")
+    ap.add_argument("--engine", default="asan", choices=["asan", "dev"],
+                    help="asan: ASan CLI build (default); dev: newest published development wheel "
+                         "(NOTE: its verification pragmas are inert, see --force-dev)")
+    ap.add_argument("--force-dev", action="store_true", help="run the dev engine even if verification is inert")
     a = ap.parse_args()
+    global ENGINE, OUT
+    ENGINE = a.engine
+    if ENGINE == "dev":
+        OUT = WORK / "results" / "hunt-dev"
+        if not devcheck.available():
+            sys.exit("dev engine missing: run  python harness/devcheck.py --install")
+        print(f"engine: dev build {devcheck.version()}", flush=True)
+        # control: a side-effecting query MUST fail under verification. If it does not, the
+        # build's verification is inert and a "0 hits" result would be meaningless.
+        ctl = devcheck.run_script("CREATE SEQUENCE s;\nSELECT avg(nextval('s'));\n", ["PRAGMA enable_verification"])
+        if ctl["outcome"] == "ok":
+            msg = ("WARNING: verification is INERT on this build (control query did not fail). "
+                   "Results would be meaningless for verification-based hunting.")
+            if not a.force_dev:
+                sys.exit(msg + " Re-run with --force-dev to hunt for crashes / internal errors only.")
+            print(msg, flush=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
     items = discover(Path(a.seeds), Path(a.llm), Path(a.fuzzer), a.limit)
