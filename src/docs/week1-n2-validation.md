@@ -34,34 +34,53 @@ Without an automated check against DuckDB's latest development branch (`main`), 
 - **SQL Reproducer:** [`~/fuzzwork/reproducers/asof_issue_26300.sql`](file:///Users/honey0025/fuzzwork/reproducers/asof_issue_26300.sql)
   ```sql
   SET disabled_optimizers='join_order';
-  CREATE TABLE tt1 (i INTEGER, j VARCHAR);
-  INSERT INTO tt1 VALUES (2, 'A'), (4, 'B'), (5, 'A');
-  CREATE TABLE tt2 (i INTEGER, j VARCHAR, k VARCHAR);
-  INSERT INTO tt2 VALUES (1, 'A', 'I'), (3, 'B', 'II');
-  SELECT tt1.i, tt2.k FROM tt1 ASOF JOIN tt2 ON (tt1.j = tt2.j OR tt1.j = tt2.j) AND tt1.i >= tt2.i ORDER BY tt1.i;
+  CREATE TABLE a_t AS SELECT (range % 3)::INTEGER AS k, ['sad', 'ok', 'happy'][1 + range % 3] AS m, range::INTEGER AS t FROM range(12);
+  CREATE TABLE b_t AS SELECT (range % 3)::INTEGER AS k, range::INTEGER AS t FROM range(12);
+  SELECT count(*) FROM a_t ASOF JOIN b_t ON a_t.k = b_t.k AND a_t.t >= b_t.t AND a_t.m IN ('sad', 'ok', 'happy');
   ```
-- **Checker Finding ID:** `66e9b71aec30`
+- **Checker Finding ID:** `af670599ce12`
 - **Triage command:** `python harness/main_triage.py ~/fuzzwork/reproducers/asof_issue_26300.sql`
-- **Pinned `main` (`690d113c`):** Exits cleanly with code 0 (Duration: 0.396s).
-- **Triage classification:** `reproduces_on_main = false` (Fixed upstream via PR #26301).
-- **Evidence directory:** `~/fuzzwork/results/triage/66e9b71aec30/` (`meta.json`, `asan.stdout.txt`, `main.stdout.txt`).
+- **Side-by-Side Comparison:**
+  - **v1.5.6 (`build-asan`):** **CRASH / UndefinedBehaviorSanitizer violation** (`rc = -6` / `exit code 134`):
+    ```text
+    duckdb/src/function/table/table_scan.cpp:819:33: runtime error: member call on null pointer of type 'duckdb::FunctionData'
+    SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior table_scan.cpp:819:33
+    ```
+    *Outcome classified:* `asan` (crash).
+  - **Pinned `main` (`build-main` @ `690d113c`):** **CLEAN EXECUTION** (`rc = 0`, duration: 0.52s):
+    Returns expected count table (`12`).
+    *Outcome classified:* `ok`.
+- **Triage classification:** `reproduces_on_main = false`
+- **Significance:** Proves the bug is fixed on upstream `main` via PR #26301. Automated triage suppresses false duplicate bug reports.
+- **Evidence directory:** `~/fuzzwork/results/triage/af670599ce12/` (`meta.json`, `asan.stderr.txt`, `main.stdout.txt`).
 
-### Case B: MERGE INTO (`WHEN NOT MATCHED BY SOURCE` / PR #26715)
+### Case B: MERGE INTO RowID Binding (PR #26715)
 - **SQL Reproducer:** [`~/fuzzwork/reproducers/merge_pr_26715.sql`](file:///Users/honey0025/fuzzwork/reproducers/merge_pr_26715.sql)
   ```sql
   SET disabled_optimizers='build_side_probe_side';
-  CREATE TABLE Stock(item_id int, balance int);
-  INSERT INTO Stock VALUES (5, 10), (10, 20), (20, 30);
-  MERGE INTO Stock USING (VALUES (5, 20), (10, 30)) new_accounts(item_id, balance) USING (item_id)
-  WHEN MATCHED THEN UPDATE
-  WHEN NOT MATCHED BY TARGET THEN INSERT
-  WHEN NOT MATCHED BY SOURCE THEN DELETE;
+  CREATE TABLE d(id INT, v INT);
+  INSERT INTO d VALUES (1,10),(2,20);
+  CREATE TABLE s(id INT, v INT);
+  INSERT INTO s VALUES (1,100);
+  MERGE INTO d USING s ON s.id=d.id
+    WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v=d.v+1;
   ```
-- **Checker Finding ID:** `8f40c8d27385`
+- **Checker Finding ID:** `246fad5901cf`
 - **Triage command:** `python harness/main_triage.py ~/fuzzwork/reproducers/merge_pr_26715.sql`
-- **Pinned `main` (`690d113c`):** Exits cleanly with code 0 (Duration: 0.153s).
-- **Triage classification:** `reproduces_on_main = false` (No crash on pinned main).
-- **Evidence directory:** `~/fuzzwork/results/triage/8f40c8d27385/` (`meta.json`, `asan.stdout.txt`, `main.stdout.txt`).
+- **Side-by-Side Comparison:**
+  - **v1.5.6 (`build-asan`):** **INTERNAL ERROR** (`rc = 1`, duration: 0.11s):
+    ```text
+    INTERNAL Error: Failed to bind column reference "rowid" [0.2] (bindings: {#[1.0], #[4.0], #[4.2]})
+    ```
+    *Outcome classified:* `internal_error`.
+  - **Pinned `main` (`build-main` @ `690d113c`):** **STILL REPRODUCES** (`rc = 1`, duration: 0.19s):
+    ```text
+    INTERNAL Error: Failed to bind column reference "rowid" [0.2] (bindings: {#[1.0], #[4.0], #[4.2]})
+    ```
+    *Outcome classified:* `internal_error`.
+- **Triage classification:** `reproduces_on_main = true`
+- **Significance:** Demonstrates a true bug reproduction across both release and developmental commits. PR #26715 merged on 12 Oct (after pinned commit `690d113c` from 9 Oct), so the defect is legitimately caught and flagged for upstream tracking!
+- **Evidence directory:** `~/fuzzwork/results/triage/246fad5901cf/` (`meta.json`, `asan.stderr.txt`, `main.stderr.txt`).
 
 ### Case C: Automated Pipeline Integration Test (`results/triage/0c5a16d788`)
 - **Saved finding tested:** `results/triage/0c5a16d788/repro.sql`

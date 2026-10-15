@@ -97,7 +97,7 @@ def run_sql(sql: str, build: str = "asan", timeout: float = 30.0,
         raise FileNotFoundError(f"{exe} not built yet")
     env = dict(os.environ)
     env.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0:symbolize=1")
-    env.setdefault("UBSAN_OPTIONS", "print_stacktrace=1")
+    env.setdefault("UBSAN_OPTIONS", "print_stacktrace=1:halt_on_error=1")
     env.update(env_extra or {})
     # NOTE: feed SQL on stdin, not -f: the shell aborts a -f script at its first
     # error but keeps going on stdin, which is what a fuzzing batch needs.
