@@ -132,7 +132,9 @@ def _call(con, sql: str, secs: float, want_rows: bool):
         t.cancel()
 
 
-def run_seed(path: Path, secs: float = 20.0) -> dict:
+def run_seed(path: Path, secs: float = 20.0,
+             check_norec: bool = False, check_tlp: bool = False,
+             metamorphic_limit: int = 5) -> dict:
     import duckdb
     stmts = runner.split_statements(path.read_text(errors="replace"))
     cons = {}
@@ -174,10 +176,73 @@ def run_seed(path: Path, secs: float = 20.0) -> dict:
             continue
         found.append({"kind": kind, "idx": idx, "sql": s[:2000], "differs": bad,
                       "detail": {n: str(res[n][1:])[:200] for n in ["default"] + bad}})
+
+    # N5: Metamorphic Oracles (NoREC & TLP) over tables created by the seed
+    if (check_norec or check_tlp) and not setup_tainted:
+        c_default = cons.get("default")
+        if c_default:
+            try:
+                schema = oracle.extract_schema(c_default)
+                for tname, cols in schema.items():
+                    try:
+                        c_default.execute(f'SELECT 1 FROM "{tname}" LIMIT 1')
+                    except Exception:
+                        continue
+                    preds = oracle.generate_predicates(cols, max_predicates=metamorphic_limit)
+                    for pred in preds:
+                        if check_norec:
+                            for opt_q, ref_q, agg_desc in oracle.generate_norec_pairs(tname, pred, cols):
+                                r_opt = _call(c_default, opt_q, secs, True)
+                                r_ref = _call(c_default, ref_q, secs, True)
+                                checked += 1
+                                if r_opt[0] == "ok" and r_ref[0] == "ok":
+                                    if r_opt[1] != r_ref[1]:
+                                        found.append({
+                                            "kind": "norec",
+                                            "idx": len(stmts),
+                                            "sql": f"{opt_q}  /* vs */  {ref_q}",
+                                            "differs": ["norec_mismatch"],
+                                            "detail": {"opt": r_opt[1], "ref": r_ref[1], "predicate": pred, "agg": agg_desc}
+                                        })
+                                elif r_opt[0] != r_ref[0]:
+                                    found.append({
+                                        "kind": "norec",
+                                        "idx": len(stmts),
+                                        "sql": f"{opt_q}  /* vs */  {ref_q}",
+                                        "differs": ["norec_error_diff"],
+                                        "detail": {"opt": r_opt, "ref": r_ref, "predicate": pred, "agg": agg_desc}
+                                    })
+                        if check_tlp:
+                            whole_q, parts_q = oracle.generate_tlp_pairs(f'"{tname}"', pred, mode="count")
+                            r_whole = _call(c_default, whole_q, secs, True)
+                            r_parts = _call(c_default, parts_q, secs, True)
+                            checked += 1
+                            if r_whole[0] == "ok" and r_parts[0] == "ok":
+                                if r_whole[1] != r_parts[1]:
+                                    found.append({
+                                        "kind": "tlp",
+                                        "idx": len(stmts),
+                                        "sql": f"{whole_q}  /* vs */  {parts_q}",
+                                        "differs": ["tlp_mismatch"],
+                                        "detail": {"whole": r_whole[1], "parts": r_parts[1], "predicate": pred}
+                                    })
+                            elif r_whole[0] != r_parts[0]:
+                                found.append({
+                                    "kind": "tlp",
+                                    "idx": len(stmts),
+                                    "sql": f"{whole_q}  /* vs */  {parts_q}",
+                                    "differs": ["tlp_error_diff"],
+                                    "detail": {"whole": r_whole, "parts": r_parts, "predicate": pred}
+                                })
+            except Exception:
+                pass
+
     return {"seed": path.name, "stmts": len(stmts), "checked": int(checked), "found": found,
             "internal": sum(f["kind"] == "internal" for f in found),
             "value_mismatches": sum(f["kind"] == "value" for f in found),
-            "error_diffs": sum(f["kind"] == "error_diff" for f in found)}
+            "error_diffs": sum(f["kind"] == "error_diff" for f in found),
+            "norec_mismatches": sum(f["kind"] == "norec" for f in found),
+            "tlp_mismatches": sum(f["kind"] == "tlp" for f in found)}
 
 
 def main() -> None:
@@ -186,9 +251,18 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=240)
+    ap.add_argument("--norec", action="store_true", help="Run NoREC metamorphic checks on seed tables")
+    ap.add_argument("--tlp", action="store_true", help="Run TLP metamorphic checks on seed tables")
+    ap.add_argument("--metamorphic", action="store_true", help="Run both NoREC and TLP checks")
+    ap.add_argument("--metamorphic-limit", type=int, default=5, help="Max generated predicates per table")
     a = ap.parse_args()
     if a.one:
-        print(json.dumps(run_seed(Path(a.one))))
+        print(json.dumps(run_seed(
+            Path(a.one),
+            check_norec=a.norec or a.metamorphic,
+            check_tlp=a.tlp or a.metamorphic,
+            metamorphic_limit=a.metamorphic_limit,
+        )))
         return
 
     seeds = sorted((WORK / "corpus" / "seeds").glob("*.sql"))
@@ -198,8 +272,17 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     def work(p: Path) -> dict:
+        cmd = [sys.executable, __file__, "--one", str(p)]
+        if a.norec:
+            cmd.append("--norec")
+        if a.tlp:
+            cmd.append("--tlp")
+        if a.metamorphic:
+            cmd.append("--metamorphic")
+        if a.metamorphic_limit != 5:
+            cmd.extend(["--metamorphic-limit", str(a.metamorphic_limit)])
         try:
-            r = subprocess.run([sys.executable, __file__, "--one", str(p)], capture_output=True,
+            r = subprocess.run(cmd, capture_output=True,
                                text=True, timeout=a.timeout, cwd=WORK / "duckdb")
             if r.returncode != 0:
                 return {"seed": p.name, "died": r.returncode, "tail": r.stderr[-400:]}
@@ -215,13 +298,14 @@ def main() -> None:
         for i, row in enumerate(ex.map(work, seeds), 1):
             fh.write(json.dumps(row) + "\n")
             fh.flush()
-            for k in ("checked", "internal", "value_mismatches", "error_diffs"):
+            for k in ("checked", "internal", "value_mismatches", "error_diffs", "norec_mismatches", "tlp_mismatches"):
                 tot[k] += row.get(k, 0)
             for k in ("died", "timeout", "error"):
                 if k in row:
                     tot[k] += 1
-            if row.get("internal") or "died" in row:
-                print(f"[{i}] {row['seed']}  internal={row.get('internal')} died={row.get('died')}", flush=True)
+            if row.get("internal") or "died" in row or row.get("norec_mismatches") or row.get("tlp_mismatches"):
+                print(f"[{i}] {row['seed']}  internal={row.get('internal')} died={row.get('died')} "
+                      f"norec={row.get('norec_mismatches')} tlp={row.get('tlp_mismatches')}", flush=True)
             if i % 200 == 0:
                 print(f"... {i}/{len(seeds)} {dict(tot)} {time.time()-t0:.0f}s", flush=True)
     print(json.dumps({"seeds": len(seeds), **tot, "secs": round(time.time() - t0)}))

@@ -86,8 +86,10 @@ def candidates():
                 if x["kind"] == "internal":
                     yield "crash", f"oracle-internal:{r['seed']}#{x['idx']}", {"stmts": stmts[:x["idx"] + 1]}
                 else:
+                    q = stmts[x["idx"]] if x["idx"] < len(stmts) else x["sql"]
+                    s = stmts[:x["idx"]] if x["idx"] < len(stmts) else stmts
                     yield x["kind"], f"oracle-{x['kind']}:{r['seed']}#{x['idx']}", {
-                        "setup": stmts[:x["idx"]], "query": stmts[x["idx"]], "differs": x["differs"]}
+                        "setup": s, "query": q, "differs": x["differs"]}
     crashes = WORK / "crashes"
     if crashes.exists():
         for f in sorted(crashes.glob("*.sql")):
