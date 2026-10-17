@@ -149,6 +149,14 @@ python src/harness/sweep_oracle.py --one corpus/seeds/test.sql --metamorphic
    - Discrepancies are flagged with `kind="norec"` or `kind="tlp"` and stored in `found`.
    - Results are counted under `norec_mismatches` and `tlp_mismatches`.
 
+### Triage Integration in `triage.py`
+`triage.py` natively supports reproducing and delta-debugging metamorphic findings:
+1. Automatically unpacks metamorphic query pairs (`q1 /* vs */ q2`).
+2. Confirms reproduction on the Python stock build.
+3. Minimizes setup statements using delta debugging (`ddmin`).
+4. Checks whether disabling DuckDB optimizers resolves the discrepancy; if so, performs optimizer bisection (`min_optimizers`) to isolate the offending optimization pass.
+5. Emits `repro.sql`, `meta.json`, and records upstream issue search results.
+
 ---
 
 ## 5. Automated Test Suite & Verification Results
@@ -163,6 +171,8 @@ FUZZ_WORK=/Users/honey0025/fuzzwork python src/harness/test_oracles.py -v
 ```text
 test_injected_mismatch_detection (__main__.TestOracles.test_injected_mismatch_detection)
 Verify that when an intentional mismatch occurs, DiffResult flags mismatch=True. ... ok
+test_metamorphic_triage_integration (__main__.TestOracles.test_metamorphic_triage_integration)
+Integration test: triage.triage_value successfully reproduces and triages metamorphic findings. ... ok
 test_norec_equivalence (__main__.TestOracles.test_norec_equivalence)
 NoREC: count(*) and sum(val) under WHERE P must equal unoptimized CASE WHEN. ... ok
 test_predicate_generation (__main__.TestOracles.test_predicate_generation)
@@ -177,15 +187,15 @@ test_type_classification (__main__.TestOracles.test_type_classification)
 classify_type correctly maps SQL types to canonical families. ... ok
 
 ----------------------------------------------------------------------
-Ran 7 tests in 0.097s
+Ran 8 tests in 0.267s
 
 OK
 ```
 
 ### Full Test Suite Regression Status
-1. `src/harness/test_oracles.py`: **7/7 passed** (0.097s)
-2. `src/harness/test_noise_gates.py`: **6/6 passed** (0.398s, all 6 noise gates verified)
-3. `src/driver/test_driver.py`: **5/5 passed** (1.352s, 547–845 QPS verified)
+1. `src/harness/test_oracles.py`: **8/8 passed** (0.267s, unit + integration)
+2. `src/harness/test_noise_gates.py`: **6/6 passed** (0.115s, all 6 noise gates verified)
+3. `src/driver/test_driver.py`: **5/5 passed** (1.146s, 530–772 QPS verified)
 
 ---
 
@@ -200,5 +210,6 @@ OK
 | TLP Generator & Checker | `src/harness/oracle.py` (`generate_tlp_pairs`, `check_tlp`) | **Done** |
 | Sweep Oracle Integration | `src/harness/sweep_oracle.py` (`--norec`, `--tlp`, `--metamorphic`) | **Done** |
 | Pipeline Candidates Fix | `src/harness/fuzz.py` (safe post-seed query indexing) | **Done** |
-| Test Suite | `src/harness/test_oracles.py` (7 tests, 100% pass) | **Done** |
+| Metamorphic Triage Engine | `src/harness/triage.py` (`triage_value` metamorphic branch) | **Done** |
+| Test Suite | `src/harness/test_oracles.py` (8 tests, 100% pass) | **Done** |
 | Documentation | `src/docs/week3-n5-validation.md` | **Done** |

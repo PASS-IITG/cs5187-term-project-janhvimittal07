@@ -159,6 +159,41 @@ class TestOracles(unittest.TestCase):
         finally:
             seed_path.unlink(missing_ok=True)
 
+    def test_metamorphic_triage_integration(self):
+        """Integration test: triage.triage_value successfully reproduces and triages metamorphic findings."""
+        import tempfile
+        import triage
+        old_upstream = triage.upstream_search
+        old_out = triage.OUT
+        triage.upstream_search = lambda *a, **kw: {"verdict": "new", "matches": []}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            triage.OUT = Path(tmp_dir)
+            try:
+                setup = [
+                    "CREATE TABLE t (id INT, v DOUBLE);",
+                    "INSERT INTO t VALUES (1, 10.0), (2, -5.0);"
+                ]
+                # Query pair with artificial discrepancy: v > 0 returns 1 row, v > 100 returns 0 rows
+                q1 = 'SELECT count(*) FROM "t" WHERE "v" > 0'
+                q2 = 'SELECT count(*) FROM "t" WHERE "v" > 100'
+                meta_query = f"{q1}  /* vs */  {q2}"
+
+                res = triage.triage_value(setup, meta_query, kind="norec", differs=["norec_mismatch"],
+                                          origin="test_meta_mismatch")
+                self.assertIsNotNone(res, "Metamorphic triage should reproduce discrepancy")
+                self.assertEqual(res["kind"], "norec")
+                self.assertTrue(res["stock_build"]["reproduces"])
+                self.assertIn("minimal_sql", res)
+
+                # Equal pair should return None (not reproducible)
+                equal_q = f"{q1}  /* vs */  {q1}"
+                res_eq = triage.triage_value(setup, equal_q, kind="norec", differs=["norec_mismatch"],
+                                             origin="test_meta_clean")
+                self.assertIsNone(res_eq, "Metamorphic triage should return None when queries produce identical results")
+            finally:
+                triage.upstream_search = old_upstream
+                triage.OUT = old_out
+
 
 if __name__ == "__main__":
     unittest.main()

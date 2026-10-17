@@ -386,6 +386,51 @@ def triage_value(setup: list[str], query: str, kind: str, differs: list[str],
         print(f"[-] {origin}: dropped (setup taint tracking: setup contains non-deterministic functions)", flush=True)
         return None
 
+    # N5: Metamorphic oracle triage (NoREC and TLP)
+    if kind in ("norec", "tlp") or "/* vs */" in query:
+        parts = [q.strip() for q in query.split("/* vs */", 1)]
+        if len(parts) != 2:
+            return None
+        q1, q2 = parts
+
+        def _norm_r(row):
+            return [oracle._norm(x) for x in row]
+
+        def bad_meta(sub_setup, cfg_stmts=None):
+            import duckdb
+            c = duckdb.connect(":memory:")
+            try:
+                for s in (cfg_stmts or []):
+                    c.execute(s)
+                for s in sub_setup:
+                    c.execute(s)
+                r1 = [_norm_r(r) for r in c.execute(q1).fetchall()]
+                r2 = [_norm_r(r) for r in c.execute(q2).fetchall()]
+                return r1 != r2
+            except Exception:
+                return False
+            finally:
+                c.close()
+
+        # Verify reproduction under default configuration
+        if not bad_meta(setup):
+            return None
+
+        mn_setup = ddmin(list(setup), bad_meta) if setup else []
+        opts: list[str] = []
+        cfg_name = "default"
+        # Check if disabling optimizers eliminates the divergence
+        if not bad_meta(mn_setup, CFG["no_optimizers"]):
+            opts = min_optimizers(lambda o: bad_meta(mn_setup, disable(o)), list(oracle.OPTIMIZERS))
+
+        final = mn_setup + [f"{q1};\n{q2};"]
+        stock = {"reproduces": True, "kind": kind, "q1": q1, "q2": q2}
+        return _finish(kind, final, cfg_name, opts, None, stock, origin, {
+            "n_statements": len(final),
+            "metamorphic_q1": q1,
+            "metamorphic_q2": q2,
+        })
+
     stmts = setup + [query]
 
     def bad(sub, cfg_b):
