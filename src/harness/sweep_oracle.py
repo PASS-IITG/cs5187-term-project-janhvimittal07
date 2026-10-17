@@ -43,47 +43,75 @@ NOISE_SEED = re.compile(r"pg_catalog|duckdb_|table_function__|information_schema
 NOISE_SQL = re.compile(r"duckdb_|pg_|stats|uuid|random|information_schema|current_|typeof|version\(", re.I)
 
 # N8: By-design error rules — these optimizers change bind-time semantics for certain
-# aggregate functions.  When only the error *class* differs (both sides fail), it is
+# aggregate functions. When only the error *class* differs (both sides fail), it is
 # not a real bug; when one side errors and the other returns rows the NONDET guard
-# already filters the query.  We drop error_diffs where the default config also
-# raised an error (both-error pattern) — this catches the statistics_propagation /
-# BITSTRING_AGG false positives that produced 16 identical junk findings in run 1.
+# already filters the query. We drop error_diffs where the default config also
+# raised an error (both-error pattern) or where BITSTRING_AGG / extract is involved.
 BY_DESIGN_OPTS = re.compile(r"statistics_propagation", re.I)
+SETUP_TAINT_RX = re.compile(
+    r"\b(random|uuid|gen_random_uuid|now|current_(timestamp|time|date)|today|"
+    r"txid_current|setseed|tablesample)\b|\busing\s+sample\b", re.I
+)
 CONFIG_NAMES = list(oracle.CONFIGS)
+
+
+def is_unordered_window(sql: str) -> bool:
+    """N8 gate: Unordered-window filter — window frame without an explicit ORDER BY."""
+    for m in re.finditer(r"\bover\s*\(([^)]+)\)", sql, re.I):
+        clause = m.group(1).lower()
+        if any(w in clause for w in ("rows", "range", "groups")) and "order by" not in clause:
+            return True
+    return False
 
 
 def eligible(sql: str) -> bool:
     if not READONLY.match(sql) or NONDET.search(sql):
         return False
+    if is_unordered_window(sql):
+        return False
     return not (re.search(r"\blimit\b", sql, re.I) and "order by" not in sql.lower())
 
 
 def is_noise(seed: str, sql: str) -> bool:
-    """Return True (and the finding will be silently dropped with a reason printed).
+    """Return True if seed or query is noise (N8 gates).
 
-    Gates implemented (N8):
+    Gates implemented:
     1. Seed-name taint  — seed file path contains known non-deterministic keywords.
     2. SQL taint        — query text contains known non-deterministic functions.
+    3. Unordered window — window functions without ORDER BY in window frame.
+    4. By-design agg    — bitstring_agg requiring statistics_propagation.
     """
     if NOISE_SEED.search(seed):
         return True
     if NOISE_SQL.search(sql):
         return True
+    if is_unordered_window(sql):
+        return True
+    if re.search(r"\bbitstring_agg\b", sql, re.I):
+        return True
     return False
 
 
 def is_bydesign_error_diff(base_result: tuple, differs: list[str],
-                           res: dict, disabled_opts: list[str]) -> bool:
-    """N8 gate: both-error pattern.
+                           res: dict, sql: str = "") -> bool:
+    """N8 gate: By-design error rules.
 
-    If the default config *also* raised an error (just a different class), the
-    discrepancy is by design (e.g. statistics_propagation changes bind-time
-    semantics for BITSTRING_AGG).  Drop such findings.
-    Also drop findings where *all* differing configs are statistics_propagation
-    (the only optimizer that changes bind-time error identity).
+    1. If the default config *also* raised an error (just a different class), both
+       sides rejected the query — not a bug.
+    2. BITSTRING_AGG requires statistics_propagation to determine bitbounds. If that
+       pass is disabled (or no_optimizers is used), a bind-time error is by design.
+    3. EXTRACT on time / empty tables differences.
+    4. If all differing configs are by-design optimizers (statistics_propagation).
     """
-    # If default itself errored, both sides failed — not a real bug
+    # If default itself errored, both sides failed
     if base_result[0] == "error":
+        return True
+    # BITSTRING_AGG requires statistics_propagation
+    if re.search(r"\bbitstring_agg\b", sql, re.I):
+        if any("statistics_propagation" in d or "no_optimizers" in d for d in differs):
+            return True
+    # EXTRACT bind error vs runtime
+    if re.search(r"\bextract\b", sql, re.I) and any("no_optimizers" in d for d in differs):
         return True
     # If all differing configs are by-design-only optimizers, suppress
     if differs and all(BY_DESIGN_OPTS.search(d) for d in differs):
@@ -114,7 +142,10 @@ def run_seed(path: Path, secs: float = 20.0) -> dict:
             c.execute(s)
         cons[name] = c
     checked, found = 0, []
+    setup_tainted = False
     for idx, s in enumerate(stmts):
+        if not READONLY.match(s) and SETUP_TAINT_RX.search(s):
+            setup_tainted = True
         want = eligible(s)
         res = {n: _call(c, s, secs, want) for n, c in cons.items()}
         checked += want and res["default"][0] == "ok"
@@ -130,10 +161,13 @@ def run_seed(path: Path, secs: float = 20.0) -> dict:
         if internal:
             kind, bad = "internal", internal
         elif vdiff:
+            # N8: Setup taint tracking — tainted setups cannot produce valid value differences
+            if setup_tainted:
+                continue
             kind, bad = "value", vdiff
         elif diff:
             # N8: by-design error rule — suppress both-error and by-design-optimizer diffs
-            if is_bydesign_error_diff(base, diff, res, []):
+            if is_bydesign_error_diff(base, diff, res, s):
                 continue
             kind, bad = "error_diff", diff
         else:

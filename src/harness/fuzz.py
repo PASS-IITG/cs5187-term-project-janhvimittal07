@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -121,49 +122,106 @@ def stage_triage(max_items: int) -> None:
         KNOWN.write_text(json.dumps(known, indent=1))
 
 
+def is_noise_item(f: dict) -> tuple[bool, str]:
+    kind = f.get("kind", "")
+    outcome = f.get("outcome") or (f.get("asan", {}) or {}).get("outcome") or ""
+    sql = " ".join(f.get("minimal_sql") or [])
+    origin = f.get("origin") or ""
+    opts = f.get("disabled_optimizers") or []
+
+    # Keep all crashes and internal errors
+    if kind in ("crash", "internal") or outcome in ("crash", "asan", "internal_error"):
+        return False, ""
+
+    # Clean ok execution is never a defect
+    if outcome == "ok" and kind != "internal":
+        return True, "clean execution (ok) is not a defect"
+
+    # Noise: main_comparison
+    if kind == "main_comparison":
+        return True, "main_comparison noise"
+
+    # Noise: bitstring_agg with statistics_propagation
+    if re.search(r"\bbitstring_agg\b", sql, re.I) or "statistics_propagation" in opts or "bitstring" in origin.lower():
+        return True, "by-design: BITSTRING_AGG requires statistics_propagation"
+
+    # Noise: unordered window
+    if sweep_oracle.is_unordered_window(sql):
+        return True, "unordered-window filter: window frame without ORDER BY"
+
+    return False, ""
+
+
 def stage_report() -> Path:
     items = []
     for m in sorted(triage.OUT.glob("*/meta.json")):
         items.append(json.loads(m.read_text()))
 
-    order = {"no-match": 0, "similar-found": 1, "duplicate-likely": 2}
-    items.sort(key=lambda f: (
-        order.get(f.get("upstream", {}).get("verdict", "untriaged"), 3),
-        f.get("kind", "")
+    SEVERITY_ORDER = {
+        "asan": 0,
+        "crash": 0,
+        "internal_error": 1,
+        "internal": 1,
+        "value": 2,
+        "value_mismatch": 2,
+        "error_diff": 3,
+    }
+    VERDICT_ORDER = {"no-match": 0, "similar-found": 1, "duplicate-likely": 2, "untriaged": 3}
+
+    cleaned_items = []
+    for f in items:
+        noise, reason = is_noise_item(f)
+        if noise:
+            sid = f.get("id") or f.get("finding_id") or "unknown"
+            print(f"[-] {sid}: dropped from report ({reason})", flush=True)
+            continue
+        # Normalize fields for unified reporting
+        f["id"] = f.get("id") or f.get("finding_id") or "unknown"
+        f["outcome"] = f.get("outcome") or (f.get("asan", {}) or {}).get("outcome") or f.get("kind") or "unknown"
+        f["kind"] = f.get("kind") or ("crash" if f["outcome"] in ("asan", "crash", "internal_error") else "value")
+        cleaned_items.append(f)
+
+    # N8: Severity ranking — crashes and internal errors first, error-vs-ok last
+    cleaned_items.sort(key=lambda f: (
+        SEVERITY_ORDER.get(f.get("outcome", f.get("kind", "")), 4),
+        VERDICT_ORDER.get(f.get("upstream", {}).get("verdict", "untriaged"), 3),
+        f.get("id", "")
     ))
 
     lines = [
         f"# Fuzzing report — {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        f"{len(items)} saved findings; findings without upstream metadata are marked untriaged.",
+        f"{len(cleaned_items)} verified findings (noise filtered via N8 gates); findings without upstream metadata are marked untriaged.",
         "Automatic upstream matches require manual confirmation.",
         "",
         "| id | kind | config | optimizers | stmts | stock build | main build | upstream |",
         "|---|---|---|---|---|---|---|---|"
     ]
 
-    for f in items:
+    for f in cleaned_items:
         upstream = f.get("upstream") or {}
-        st = f.get("stock_build") or {}
-        mb = f.get("main_build") or {}
+        st = f.get("stock_build") or f.get("asan") or {}
+        mb = f.get("main_build") or f.get("main") or {}
+        repro_st = st.get("reproduces") if "reproduces" in st else (st.get("outcome") in ("crash", "asan", "internal_error"))
+        repro_mb = mb.get("reproduces_on_main") if "reproduces_on_main" in mb else (mb.get("outcome") in ("crash", "asan", "internal_error"))
         lines.append(
             f"| {f.get('id', '-')} | {f.get('kind', '-')}/{f.get('outcome', '-')} | "
             f"{f.get('config', '-')} | "
             f"{','.join(f.get('disabled_optimizers') or []) or '-'} | "
             f"{f.get('n_statements', '-')} | "
-            f"{'yes' if st.get('reproduces') else 'no' if st else 'unknown'} | "
-            f"{'yes' if mb.get('reproduces_on_main') else 'no' if mb.get('available') else 'n/a'} | "
+            f"{'yes' if repro_st else 'no' if st else 'unknown'} | "
+            f"{'yes' if repro_mb else 'no' if mb else 'n/a'} | "
             f"{upstream.get('verdict', 'untriaged')} |"
         )
 
-    for f in items:
+    for f in cleaned_items:
         upstream = f.get("upstream") or {}
         disabled = f.get("disabled_optimizers") or []
         config = f.get("config", "")
         setup = triage.disable(disabled) if disabled else triage.CFG.get(config, [])
         lines += [
             "",
-            f"## {f.get('id', '-')} — {f.get('kind', '-')} "
+            f"## {f.get('id', '-')} — {f.get('kind', '-')}/{f.get('outcome', '-')} "
             f"({upstream.get('verdict', 'untriaged')})",
             "",
             f"Origin: `{f.get('origin', '-')}`",
@@ -171,16 +229,25 @@ def stage_report() -> Path:
             f"Config: `{config}`; disabled optimizers: `{','.join(disabled) or '-'}`",
         ]
         # N2: show pinned-main result
-        mb = f.get("main_build") or {}
-        if mb.get("available"):
+        mb = f.get("main_build") or f.get("main") or {}
+        if mb:
+            repro_mb = mb.get("reproduces_on_main") if "reproduces_on_main" in mb else (mb.get("outcome") in ("crash", "asan", "internal_error"))
             lines.append(
                 f"Pinned-main ({triage.MAIN_BIN.name}): outcome=`{mb.get('outcome', '-')}` "
-                f"reproduces={mb.get('reproduces_on_main', '-')} ({mb.get('duration_s', '-')}s)"
+                f"reproduces={repro_mb} ({mb.get('duration_seconds', mb.get('duration_s', '-'))}s)"
             )
+        repro_file = triage.OUT / f["id"] / "reproducer.sql"
+        if not repro_file.exists():
+            repro_file = triage.OUT / f["id"] / "repro.sql"
+        if repro_file.exists():
+            sql_body = repro_file.read_text().strip()
+        else:
+            sql_body = (triage.prelude(setup) + "\n".join(f.get("minimal_sql") or [])).strip()
+
         lines += [
             "",
             "```sql",
-            triage.prelude(setup) + "\n".join(f.get("minimal_sql") or []),
+            sql_body,
             "```",
             ""
         ]
