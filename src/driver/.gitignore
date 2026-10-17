@@ -1,6 +1,0 @@
-driver
-driver-asan
-driver-cov
-driver-main
-*.o
-*.dSYM

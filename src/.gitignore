@@ -13,3 +13,6 @@ results/cov*/
 crashes/*.log
 .env
 gen/out/
+driver/driver*
+driver/*.o
+driver/*.dSYM
