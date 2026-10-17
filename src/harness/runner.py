@@ -6,6 +6,7 @@ asan, crash, timeout. internal_error / asan / crash are the interesting ones.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -16,6 +17,12 @@ WORK = Path(os.environ.get("FUZZ_WORK", Path(__file__).resolve().parent.parent))
 BUILDS = {
     "asan": WORK / "build-asan" / "duckdb",
     "cov": WORK / "build-cov" / "duckdb",
+}
+
+DRIVER_DIR = Path(__file__).resolve().parent.parent / "driver"
+DRIVERS = {
+    "asan": DRIVER_DIR / "driver-asan",
+    "cov": DRIVER_DIR / "driver-cov",
 }
 
 INTERESTING = {"internal_error", "asan", "crash", "timeout"}
@@ -135,8 +142,64 @@ def split_statements(sql: str) -> list[str]:
 
 def find_culprit(setup: str, stmts: list[str], build: str = "asan", timeout: float = 30.0) -> tuple[int, Result] | None:
     """After a batch crash, re-run prefix + one statement to locate the trigger."""
+    drv = DRIVERS.get(build)
+    if drv and drv.exists():
+        batch = [(f"stmt_{i}", setup + "\n" + s) for i, s in enumerate(stmts)]
+        results = run_batch(batch, build=build, timeout=timeout)
+        for i, (_, r) in enumerate(results):
+            if r.interesting:
+                return i, r
+        return None
+
     for i, s in enumerate(stmts):
         r = run_sql(setup + "\n" + s, build, timeout)
         if r.interesting:
             return i, r
     return None
+
+
+def run_batch(items: list[tuple[str, str]], build: str = "asan", timeout: float = 30.0,
+              isolate: bool = True, capture_stdout: bool = False) -> list[tuple[str, Result]]:
+    """Run a batch of (id, sql) queries using the fast in-process batch driver.
+
+    Falls back automatically to run_sql() if the driver binary is not compiled.
+    """
+    drv = DRIVERS.get(build)
+    if not drv or not drv.exists():
+        return [(qid, run_sql(sql, build=build, timeout=timeout)) for qid, sql in items]
+
+    cmd = [str(drv), f"--timeout={timeout}"]
+    if isolate:
+        cmd.append("--isolate")
+    else:
+        cmd.append("--no-isolate")
+    if capture_stdout:
+        cmd.append("--capture-stdout")
+
+    lines = []
+    for qid, sql in items:
+        lines.append(json.dumps({"id": qid, "sql": sql, "timeout_ms": int(timeout * 1000)}))
+    payload = "\n".join(lines) + "\n"
+
+    try:
+        p = subprocess.run(cmd, input=payload, text=True, capture_output=True, check=True)
+    except Exception:
+        # Fallback to CLI if invocation fails
+        return [(qid, run_sql(sql, build=build, timeout=timeout)) for qid, sql in items]
+
+    results_map: dict[str, Result] = {}
+    for line in p.stdout.strip().splitlines():
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                data = json.loads(line)
+                qid = data.get("id", "")
+                r = classify(data.get("returncode", 0), data.get("stdout", ""), data.get("stderr", ""))
+                if data.get("outcome") in INTERESTING:
+                    r.outcome = data["outcome"]
+                results_map[qid] = r
+            except Exception:
+                pass
+
+    return [(qid, results_map.get(qid) or run_sql(sql, build=build, timeout=timeout)) for qid, sql in items]
+
