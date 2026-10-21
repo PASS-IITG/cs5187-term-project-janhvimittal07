@@ -40,21 +40,40 @@ ENGINE = "asan"          # "asan" = ASan CLI build, "dev" = newest published dev
 VERIFY = "PRAGMA enable_verification"
 ALL_OPTS = oracle.OPTIMIZERS
 
-PASS1 = {
+PASS1_V1 = {                      # DuckDB 1.x: statement-level verification
     "verify": [VERIFY],
     "verify_parallel": [VERIFY, "PRAGMA verify_parallelism"],
     "verify_serializer": [VERIFY, "PRAGMA verify_serializer"],
     "verify_external": [VERIFY, "PRAGMA verify_external"],
 }
+VECMODE = "SET GLOBAL debug_verification_mode='%s'"
+PASS1_V2 = {                      # DuckDB 2.x: enable_verification is a no-op; vector-level modes
+    "default": [],
+    "vec_vectors": [VECMODE % "VERIFY_VECTORS"],
+    "vec_serialization": [VECMODE % "VERIFY_SERIALIZATION"],
+    "vec_functions": [VECMODE % "VERIFY_FUNCTIONS"],
+    "vec_compression": [VECMODE % "VERIFY_COMPRESSION"],
+    "parallelism": ["PRAGMA verify_parallelism"],
+    "roundtrip": [],              # print-and-reparse oracle, python engine only (see devcheck.run_roundtrip)
+}
+PASS1 = PASS1_V1
+BASE_VERIFY = VERIFY              # the verification setting combined with optimizer switches in pass 2
+ORACLE = "v1"
 # feature keyword -> optimizers worth disabling for scripts that use it
 PASS2_MAP = [
-    (r"\bover\s*\(", ["window_self_join", "top_n_window_elimination"]),
-    (r"\bjoin\b", ["join_elimination", "join_order", "build_side_probe_side", "join_filter_pushdown"]),
+    (r"\bover\s*\(", ["window_self_join", "top_n_window_elimination", "window_rewriter", "partitioned_execution"]),
+    (r"\bjoin\b", ["join_elimination", "join_order", "build_side_probe_side", "join_filter_pushdown",
+                    "outer_join_simplification"]),
     (r"\bwith\b", ["cte_inlining", "materialized_cte", "common_subplan", "cte_filter_pusher"]),
     (r"\b(limit|order\s+by)\b", ["late_materialization", "top_n", "limit_pushdown"]),
     (r"\bunnest\b", ["unnest_rewriter"]),
-    (r"\b(group\s+by|distinct)\b", ["duplicate_groups", "common_aggregate", "sum_rewriter"]),
-    (r"\b(where|having)\b", ["filter_pushdown", "filter_pullup", "reorder_filter", "statistics_propagation"]),
+    (r"\b(group\s+by|distinct|count|sum|avg|min|max)\b", ["duplicate_groups", "common_aggregate", "sum_rewriter",
+                    "aggregate_function_rewriter", "aggregate_reuse", "distinct_aggregate_rewrite",
+                    "partial_aggregate_pushdown"]),
+    (r"\b(grouping\s+sets|rollup|cube)\b", ["grouping_sets"]),
+    (r"\border\s+by\b", ["redundant_order_keys", "projection_pullup", "projection_placement"]),
+    (r"\b(where|having)\b", ["filter_pushdown", "filter_pullup", "reorder_filter", "statistics_propagation",
+                              "type_pushdown", "scalar_fn_pushdown"]),
 ]
 VERIFY_RX = re.compile(r"statement differs from original result|verification failed|"
                        r"Unoptimized Result differs|result differs", re.I)
@@ -66,20 +85,26 @@ SKIP_VERIFY = re.compile(r"disable_verification|\brandom\s*\(|\buuid\s*\(|\bnow\
 VOLATILE = re.compile(r"\b(nextval|currval|random|uuid|gen_random_uuid|now|today|current_(timestamp|time|date)|"
                       r"setseed|txid_current|approx_\w+|reservoir_quantile|sample|tablesample|"
                       r"pg_sleep|getenv|uuidv\d|shuffle|bitstring_agg)\b|using\s+sample", re.I)
-CRASHY = {"internal_error", "asan", "crash", "verify_diff"}
+CRASHY = {"internal_error", "asan", "crash", "verify_diff", "roundtrip"}
 _tls = threading.local()
 
 
-def discover(seeds: Path, llm: Path, fuzzer: Path, limit: int) -> list[tuple[str, str]]:
-    """Most promising inputs first: LLM scripts, past-fuzzer regression tests, then seeds."""
+def discover(seeds: Path, llm: Path, fuzzer: Path, limit: int, old_seeds: Path | None = None,
+             old_fuzzer: Path | None = None) -> list[tuple[str, str]]:
+    """Most promising inputs first: LLM scripts, past-fuzzer regression tests, then seeds.
+    old_seeds / old_fuzzer: skip inputs that already existed there (i.e. keep only what is NEW)."""
     items: list[tuple[str, str]] = []
     for f in sorted(llm.rglob("*.sql")):
         items.append((f"llm:{f.parent.name}/{f.name}", f.read_text(errors="replace")))
     for f in sorted(fuzzer.rglob("*.test")):
+        if old_fuzzer and (old_fuzzer / f.relative_to(fuzzer)).exists():
+            continue
         stmts = extract_seeds.parse(f.read_text(errors="replace"))
         if stmts:
             items.append((f"fuzzer:{f.parent.name}/{f.name}", "\n".join(stmts) + "\n"))
     for f in sorted(seeds.glob("*.sql")):
+        if old_seeds and (old_seeds / f.name).exists():
+            continue
         items.append((f"seed:{f.name}", f.read_text(errors="replace")))
     return items[:limit] if limit else items
 
@@ -95,6 +120,12 @@ def _msg_sig(kind: str, msg: str) -> str:
 def run_one(name: str, script: str, cfg_name: str, cfg: list[str], timeout: float = 60.0) -> dict:
     if not hasattr(_tls, "tmp"):
         _tls.tmp = tempfile.mkdtemp(prefix="hunt_tmp_")
+    if cfg_name == "roundtrip":
+        r = devcheck.run_roundtrip(script, VOLATILE.pattern, timeout)
+        f0 = (r.get("finds") or [[""] * 4])[0]
+        sig = _msg_sig("roundtrip", f0[0] + " " + re.sub(r"\s+", " ", f0[2])[:120]) if r["outcome"] == "roundtrip" else ""
+        return {"script": name, "config": cfg_name, "outcome": r["outcome"], "sig": sig,
+                "tail": ("%s | %s -> %s %s" % tuple(f0))[:700] if r["outcome"] == "roundtrip" else ""}
     if ENGINE == "dev":
         r = devcheck.run_script(script, [s.rstrip().rstrip(";") for s in cfg] +
                                 [f"SET temp_directory='{_tls.tmp}'"], timeout)
@@ -124,8 +155,8 @@ def run_one(name: str, script: str, cfg_name: str, cfg: list[str], timeout: floa
 def build_jobs(items, passes: set[int]):
     jobs = []
     for name, script in items:
-        if SKIP_VERIFY.search(script) and "disable_verification" in script.lower():
-            continue                      # test explicitly turns verification off
+        if ORACLE == "v1" and SKIP_VERIFY.search(script) and "disable_verification" in script.lower():
+            continue                      # test explicitly turns verification off (v1 only)
         stmts = runner.split_statements(script)
         clean = [s for s in stmts if not VOLATILE.search(s)]
         if not clean:
@@ -133,6 +164,8 @@ def build_jobs(items, passes: set[int]):
         body = "\n".join(clean) + "\n"
         if 1 in passes:
             for cn, cfg in PASS1.items():
+                if cn == "roundtrip" and ENGINE != "dev":
+                    continue
                 jobs.append((name, body, cn, cfg))
         if 2 in passes:
             low = body.lower()
@@ -140,16 +173,16 @@ def build_jobs(items, passes: set[int]):
             for rx, os_ in PASS2_MAP:
                 if re.search(rx, low):
                     opts += [o for o in os_ if o not in opts]
-            for o in opts[:6]:
-                jobs.append((name, body, f"verify+no_{o}", [VERIFY] + triage.disable([o])))
+            for o in [x for x in opts if x in oracle.OPTIMIZERS][:8]:
+                jobs.append((name, body, f"verify+no_{o}", [BASE_VERIFY] + triage.disable([o])))
     return jobs
 
 
 def minimise(hit: dict, scripts: dict[str, str]) -> dict:
     stmts = runner.split_statements(scripts[hit["script"]])
     cfg_name = hit["config"]
-    cfg = ([VERIFY] + triage.disable([cfg_name.split("no_", 1)[1]]) if cfg_name.startswith("verify+no_")
-           else PASS1.get(cfg_name, [VERIFY]))
+    cfg = ([BASE_VERIFY] + triage.disable([cfg_name.split("no_", 1)[1]]) if cfg_name.startswith("verify+no_")
+           else PASS1.get(cfg_name, [BASE_VERIFY]))
     sig = hit["sig"]
 
     def same(sub: list[str]) -> bool:
@@ -165,7 +198,10 @@ def minimise(hit: dict, scripts: dict[str, str]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--seeds", default=str(WORK / "corpus" / "seeds-v2"))
+    seeds_default = WORK / "corpus" / "seeds-v2"
+    if not seeds_default.exists():
+        seeds_default = WORK / "corpus" / "seeds"
+    ap.add_argument("--seeds", default=str(seeds_default))
     ap.add_argument("--llm", default=str(WORK / "corpus" / "llm"))
     ap.add_argument("--fuzzer", default=str(WORK / "duckdb" / "test" / "fuzzer"))
     ap.add_argument("--workers", type=int, default=4)
@@ -173,29 +209,60 @@ def main() -> None:
     ap.add_argument("--passes", default="1,2")
     ap.add_argument("--max-min", type=int, default=40, help="max unique hits to minimise")
     ap.add_argument("--engine", default="asan", choices=["asan", "dev"],
-                    help="asan: ASan CLI build (default); dev: newest published development wheel "
-                         "(NOTE: its verification pragmas are inert, see --force-dev)")
-    ap.add_argument("--force-dev", action="store_true", help="run the dev engine even if verification is inert")
+                    help="asan: ASan CLI build (default); dev: python wheel in $FUZZ_WORK/.venv-dev "
+                         "(also the only engine with the print-and-reparse oracle)")
+    ap.add_argument("--oracle", default="auto", choices=["auto", "v1", "v2"],
+                    help="v1: enable_verification (DuckDB 1.x). v2: debug_verification_mode + round trip "
+                         "(DuckDB 2.x; enable_verification is a no-op there). auto: from src/DUCKDB_VERSION")
+    ap.add_argument("--force-dev", action="store_true", help="run even if the verification guard fails")
+    ap.add_argument("--only", default="", help="comma list of pass-1 config names to run (default: all)")
+    ap.add_argument("--exclude-seeds-dir", default="", help="skip seeds whose file already exists in this older seed dir")
+    ap.add_argument("--exclude-fuzzer-dir", default="", help="skip regression tests that already exist in this older test/fuzzer dir")
     a = ap.parse_args()
-    global ENGINE, OUT
+    global ENGINE, OUT, ORACLE, PASS1, BASE_VERIFY
     ENGINE = a.engine
+    ORACLE = a.oracle
+    if ORACLE == "auto":
+        ver = (HERE.parent / "DUCKDB_VERSION").read_text().strip() if (HERE.parent / "DUCKDB_VERSION").exists() else "v2"
+        ORACLE = "v1" if ver.startswith("v1.") else "v2"
+    if ORACLE == "v2":
+        PASS1, BASE_VERIFY = PASS1_V2, VECMODE % "VERIFY_VECTORS"
+    if a.only:
+        keep = set(a.only.split(","))
+        PASS1 = {k: v for k, v in PASS1.items() if k in keep}
+    print(f"oracle: {ORACLE} | engine: {ENGINE} | work dir: {WORK} | pass-1 configs: {list(PASS1)}", flush=True)
     if ENGINE == "dev":
         OUT = WORK / "results" / "hunt-dev"
         if not devcheck.available():
             sys.exit("dev engine missing: run  python harness/devcheck.py --install")
-        print(f"engine: dev build {devcheck.version()}", flush=True)
-        # control: a side-effecting query MUST fail under verification. If it does not, the
-        # build's verification is inert and a "0 hits" result would be meaningless.
-        ctl = devcheck.run_script("CREATE SEQUENCE s;\nSELECT avg(nextval('s'));\n", ["PRAGMA enable_verification"])
-        if ctl["outcome"] == "ok":
-            msg = ("WARNING: verification is INERT on this build (control query did not fail). "
-                   "Results would be meaningless for verification-based hunting.")
-            if not a.force_dev:
-                sys.exit(msg + " Re-run with --force-dev to hunt for crashes / internal errors only.")
-            print(msg, flush=True)
+        print(f"engine build: DuckDB {devcheck.version()}", flush=True)
+    # ---- guards: never let an inert oracle produce a silent "0 hits" ----
+    if ORACLE == "v1":
+        if ENGINE == "dev":
+            ctl = devcheck.run_script("CREATE SEQUENCE s;\nSELECT avg(nextval('s'));\n", ["PRAGMA enable_verification"])
+            ok, why = ctl["outcome"] != "ok", "control query (nextval under enable_verification) did not fail"
+        else:
+            ok, why = True, ""
+    else:
+        if ENGINE == "dev":
+            ok, detail = devcheck.setting_works("VERIFY_VECTORS")
+            why = f"SET GLOBAL debug_verification_mode did not apply (got {detail!r})"
+        else:
+            r = runner.run_sql("SET GLOBAL debug_verification_mode='VERIFY_VECTORS';\n"
+                               "SELECT current_setting('debug_verification_mode');\n", "asan", 60)
+            ok, why = "VERIFY_VECTORS" in r.stdout.upper(), "debug_verification_mode did not apply on the CLI build"
+    if not ok:
+        msg = f"WARNING: oracle guard failed: {why}. Results would not mean what they claim."
+        if not a.force_dev:
+            sys.exit(msg + " Re-run with --force-dev to hunt for crashes / internal errors only.")
+        print(msg, flush=True)
+    else:
+        print("oracle guard: ok", flush=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
-    items = discover(Path(a.seeds), Path(a.llm), Path(a.fuzzer), a.limit)
+    items = discover(Path(a.seeds), Path(a.llm), Path(a.fuzzer), a.limit,
+                     Path(a.exclude_seeds_dir) if a.exclude_seeds_dir else None,
+                     Path(a.exclude_fuzzer_dir) if a.exclude_fuzzer_dir else None)
     jobs = build_jobs(items, {int(x) for x in a.passes.split(",")})
     scripts = {j[0]: j[1] for j in jobs}          # the cleaned body that actually ran
     print(f"{len(items)} scripts, {len(jobs)} runs "

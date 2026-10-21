@@ -63,19 +63,28 @@ def available() -> bool:
     return DEV_PY.exists()
 
 
+def _compatible(name: str) -> bool:
+    """Linux x86_64 wheel usable by this interpreter: exact cpXY or a stable-ABI (abi3) wheel."""
+    if not (name.endswith(".whl") and "manylinux" in name and "x86_64" in name):
+        return False
+    py = sys.version_info.minor
+    if f"-cp3{py}-cp3{py}-" in name:
+        return True
+    m = re.search(r"-cp3(\d+)-abi3-", name)
+    return bool(m and int(m.group(1)) <= py)
+
+
 def install() -> str:
     """Download the newest published duckdb wheel (dev or stable) into a private venv."""
     meta = json.load(urllib.request.urlopen("https://pypi.org/pypi/duckdb/json", timeout=60))
-    tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
     best = None
     for ver, files in meta["releases"].items():
         for f in files:
             n = f["filename"]
-            if tag in n and "manylinux" in n and "x86_64" in n and n.endswith(".whl"):
-                if best is None or f["upload_time"] > best[0]:
-                    best = (f["upload_time"], ver, f["url"], n)
+            if _compatible(n) and (best is None or f["upload_time"] > best[0]):
+                best = (f["upload_time"], ver, f["url"], n)
     if best is None:
-        raise SystemExit(f"no manylinux x86_64 wheel for {tag}")
+        raise SystemExit(f"no manylinux x86_64 wheel for python 3.{sys.version_info.minor}")
     _, ver, url, name = best
     cache = WORK / "wheels"
     cache.mkdir(exist_ok=True)
@@ -118,6 +127,71 @@ def run_script(sql: str, pre: list[str] | tuple = (), timeout: float = 60.0) -> 
             outcome = "verify_diff"
             break
     r["outcome"] = outcome
+    return r
+
+
+def setting_works(mode: str = "VERIFY_VECTORS") -> tuple[bool, str]:
+    """Is `SET GLOBAL debug_verification_mode` accepted, and does it read back? (v2.0 verification)"""
+    code = ("import duckdb\nc=duckdb.connect()\n"
+            f"c.execute(\"SET GLOBAL debug_verification_mode='{mode}'\")\n"
+            "print(c.execute(\"SELECT current_setting('debug_verification_mode')\").fetchone()[0])")
+    try:
+        p = subprocess.run([str(DEV_PY), "-c", code], capture_output=True, text=True, timeout=60)
+    except Exception as e:                         # noqa: BLE001
+        return False, repr(e)
+    out = (p.stdout or "").strip()
+    return (p.returncode == 0 and out.upper() == mode), (out or p.stderr[-200:])
+
+
+_RT_CHILD = r'''
+import duckdb, json, re, sys
+d = json.load(sys.stdin)
+c = duckdb.connect(":memory:")
+RO = re.compile(r"^\s*(select|with|from|values|table)\b", re.I)
+SKIP = re.compile(d["skip"], re.I)
+finds = []
+for s in d["stmts"]:
+    q = s.strip().rstrip(";")
+    if not RO.match(q) or SKIP.search(q):
+        try: c.execute(s); c.fetchall()
+        except Exception: pass
+        continue
+    try:
+        j = c.execute("SELECT json_serialize_sql(?)", [q]).fetchone()[0]
+        printed = c.execute("SELECT json_deserialize_sql(?)", [j]).fetchone()[0]
+    except Exception:
+        printed = None
+    try: a = c.execute(q).fetchall(); aerr = None
+    except Exception as e: a = None; aerr = type(e).__name__
+    if not printed or aerr:
+        continue
+    try: b = c.execute(printed).fetchall(); berr = None
+    except Exception as e: b = None; berr = type(e).__name__ + ": " + str(e).splitlines()[0][:80]
+    if berr:
+        finds.append(["roundtrip_reparse_fail", q[:300], printed[:300], berr])
+    elif sorted(map(repr, a)) != sorted(map(repr, b)):
+        finds.append(["roundtrip_result_diff", q[:300], printed[:300], ""])
+print(json.dumps({"finds": finds}))
+'''
+
+
+def run_roundtrip(sql: str, skip: str, timeout: float = 90.0) -> dict:
+    """Print every read-only query back to SQL (json_serialize_sql -> json_deserialize_sql) and
+    check the printed text still parses and returns the same rows. Replaces the old
+    'parsed statement' verifier, which found the COLLATE-in-BETWEEN bug."""
+    from runner import split_statements
+    try:
+        p = subprocess.run([str(DEV_PY), "-c", _RT_CHILD], input=json.dumps({"stmts": split_statements(sql), "skip": skip}),
+                           capture_output=True, text=True, timeout=timeout, cwd=WORK / "duckdb")
+    except subprocess.TimeoutExpired:
+        return {"outcome": "timeout", "finds": []}
+    if p.returncode != 0:
+        return {"outcome": "crash" if p.returncode < 0 else "error", "finds": [], "tail": p.stderr[-300:]}
+    try:
+        r = json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception:                              # noqa: BLE001
+        return {"outcome": "error", "finds": []}
+    r["outcome"] = "roundtrip" if r["finds"] else "ok"
     return r
 
 

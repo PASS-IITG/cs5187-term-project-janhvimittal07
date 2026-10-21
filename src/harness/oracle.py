@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 import duckdb
 
-# Names taken from duckdb/src/common/enums/optimizer_type.cpp (v1.5.6).
-OPTIMIZERS = [
+# Optimizer names differ between DuckDB versions (2.0.0 added 14 and removed 1), so they are
+# read from the DuckDB source in use; the static v1.5.6 list is only a fallback.
+_STATIC_OPTIMIZERS = [
     "expression_rewriter", "filter_pullup", "filter_pushdown", "empty_result_pullup",
     "cte_filter_pusher", "regex_range", "in_clause", "join_order", "deliminator",
     "unnest_rewriter", "unused_columns", "statistics_propagation", "common_subexpressions",
@@ -22,6 +23,24 @@ OPTIMIZERS = [
     "materialized_cte", "sum_rewriter", "late_materialization", "cte_inlining",
     "common_subplan", "join_elimination", "window_self_join",
 ]
+
+
+def _load_optimizers() -> list[str]:
+    import os
+    import re
+    from pathlib import Path
+    work = Path(os.environ.get("FUZZ_WORK", Path(__file__).resolve().parent.parent))
+    f = work / "duckdb" / "src" / "common" / "enums" / "optimizer_type.cpp"
+    try:
+        names = re.findall(r'\{"([a-z_]+)",\s*OptimizerType::(?!INVALID|EXTENSION)', f.read_text())
+        return names or list(_STATIC_OPTIMIZERS)
+    except OSError:
+        return list(_STATIC_OPTIMIZERS)
+
+
+OPTIMIZERS = _load_optimizers()
+# optimizers that did not exist in v1.5.6: brand-new, least-tested code
+NEW_OPTIMIZERS = [o for o in OPTIMIZERS if o not in _STATIC_OPTIMIZERS]
 
 
 def _disable(names):
@@ -35,6 +54,8 @@ CONFIGS: dict[str, list[str]] = {
     "many_threads": ["SET threads=8"],
     "no_insertion_order": ["SET preserve_insertion_order=false"],
 }
+if NEW_OPTIMIZERS:      # compare against a run with only the brand-new optimizers switched off
+    CONFIGS["no_new_optimizers"] = _disable(NEW_OPTIMIZERS)
 # one config per optimizer: isolates which pass causes a mismatch
 PER_OPTIMIZER = {f"no_{o}": _disable([o]) for o in OPTIMIZERS}
 
