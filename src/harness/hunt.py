@@ -91,12 +91,15 @@ _tls = threading.local()
 
 
 def discover(seeds: Path, llm: Path, fuzzer: Path, limit: int, old_seeds: Path | None = None,
-             old_fuzzer: Path | None = None) -> list[tuple[str, str]]:
+             old_fuzzer: Path | None = None, mutants: Path | None = None) -> list[tuple[str, str]]:
     """Most promising inputs first: LLM scripts, past-fuzzer regression tests, then seeds.
     old_seeds / old_fuzzer: skip inputs that already existed there (i.e. keep only what is NEW)."""
     items: list[tuple[str, str]] = []
     for f in sorted(llm.rglob("*.sql")):
         items.append((f"llm:{f.parent.name}/{f.name}", f.read_text(errors="replace")))
+    if mutants and mutants.exists():
+        for f in sorted(mutants.glob("*.sql")):
+            items.append((f"mutant:{mutants.name}/{f.name}", f.read_text(errors="replace")))
     for f in sorted(fuzzer.rglob("*.test")):
         if old_fuzzer and (old_fuzzer / f.relative_to(fuzzer)).exists():
             continue
@@ -218,6 +221,8 @@ def main() -> None:
                     help="v1: enable_verification (DuckDB 1.x). v2: debug_verification_mode + round trip "
                          "(DuckDB 2.x; enable_verification is a no-op there). auto: from src/DUCKDB_VERSION")
     ap.add_argument("--force-dev", action="store_true", help="run even if the verification guard fails")
+    ap.add_argument("--mutants", default="", help="dir of generated mutants (harness/mutate_corpus.py)")
+    ap.add_argument("--no-seeds", action="store_true", help="do not read seeds / regression tests (use with --mutants)")
     ap.add_argument("--only", default="", help="comma list of pass-1 config names to run (default: all)")
     ap.add_argument("--exclude-seeds-dir", default="", help="skip seeds whose file already exists in this older seed dir")
     ap.add_argument("--exclude-fuzzer-dir", default="", help="skip regression tests that already exist in this older test/fuzzer dir")
@@ -265,7 +270,10 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     items = discover(Path(a.seeds), Path(a.llm), Path(a.fuzzer), a.limit,
                      Path(a.exclude_seeds_dir) if a.exclude_seeds_dir else None,
-                     Path(a.exclude_fuzzer_dir) if a.exclude_fuzzer_dir else None)
+                     Path(a.exclude_fuzzer_dir) if a.exclude_fuzzer_dir else None,
+                     Path(a.mutants) if a.mutants else None)
+    if a.no_seeds:
+        items = [(n, s) for n, s in items if n.startswith(("mutant:", "llm:"))]
     jobs = build_jobs(items, {int(x) for x in a.passes.split(",")})
     scripts = {j[0]: j[1] for j in jobs}          # the cleaned body that actually ran
     print(f"{len(items)} scripts, {len(jobs)} runs "
