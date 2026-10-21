@@ -85,6 +85,7 @@ SKIP_VERIFY = re.compile(r"disable_verification|\brandom\s*\(|\buuid\s*\(|\bnow\
 VOLATILE = re.compile(r"\b(nextval|currval|random|uuid|gen_random_uuid|now|today|current_(timestamp|time|date)|"
                       r"setseed|txid_current|approx_\w+|reservoir_quantile|sample|tablesample|"
                       r"pg_sleep|getenv|uuidv\d|shuffle|bitstring_agg)\b|using\s+sample", re.I)
+PLACEHOLDER = re.compile(r"\{(TEMP|DATA|WORKING)_?DIR\}|__TEST_DIR__|__WORKING_DIRECTORY__")
 CRASHY = {"internal_error", "asan", "crash", "verify_diff", "roundtrip"}
 _tls = threading.local()
 
@@ -157,6 +158,8 @@ def build_jobs(items, passes: set[int]):
     for name, script in items:
         if ORACLE == "v1" and SKIP_VERIFY.search(script) and "disable_verification" in script.lower():
             continue                      # test explicitly turns verification off (v1 only)
+        if PLACEHOLDER.search(script):
+            continue                      # unreplaced test-format placeholders: not a valid script
         stmts = runner.split_statements(script)
         clean = [s for s in stmts if not VOLATILE.search(s)]
         if not clean:

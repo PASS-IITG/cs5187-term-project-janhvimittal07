@@ -149,10 +149,11 @@ d = json.load(sys.stdin)
 c = duckdb.connect(":memory:")
 RO = re.compile(r"^\s*(select|with|from|values|table)\b", re.I)
 SKIP = re.compile(d["skip"], re.I)
+WRITE = re.compile(r"\b(insert|update|delete|merge|returning|copy|create|drop|alter|call|pragma|attach|install|load|truncate|vacuum|checkpoint)\b", re.I)
 finds = []
 for s in d["stmts"]:
     q = s.strip().rstrip(";")
-    if not RO.match(q) or SKIP.search(q):
+    if not RO.match(q) or SKIP.search(q) or WRITE.search(q):   # data-modifying queries cannot be run twice
         try: c.execute(s); c.fetchall()
         except Exception: pass
         continue
