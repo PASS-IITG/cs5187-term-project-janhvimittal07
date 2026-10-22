@@ -378,7 +378,7 @@ def check_tlp(table_query: str, predicate: str, setup: list[str] | None = None,
     Can run with existing connection `con` or execute `setup` on a fresh connection.
     """
     whole, parts = generate_tlp_pairs(table_query, predicate, mode=mode)
-    ordered = (mode == "rows")
+    ordered = False        # partitions come back concatenated (TRUE, FALSE, NULL), so compare rows as multisets
 
     if con is not None:
         try:
