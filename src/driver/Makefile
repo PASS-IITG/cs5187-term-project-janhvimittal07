@@ -1,4 +1,11 @@
+UNAME := $(shell uname)
+ifeq ($(UNAME),Darwin)
 CXX := /opt/homebrew/opt/llvm/bin/clang++
+LIBCXX ?= -lc++
+else
+CXX := clang++
+LIBCXX ?= -lstdc++
+endif
 FUZZ_WORK ?= $(HOME)/fuzzwork
 DUCKDB_DIR ?= $(FUZZ_WORK)/duckdb
 
@@ -16,7 +23,7 @@ ASAN_LIBS = $(ASAN_BUILD)/extension/libduckdb_generated_extension_loader.a \
             $(ASAN_BUILD)/extension/json/libjson_extension.a \
             $(ASAN_BUILD)/third_party/utf8proc/libduckdb_utf8proc.a \
             $(ASAN_BUILD)/src/libduckdb_static.a \
-            -fsanitize=address,undefined -fno-omit-frame-pointer -lc++ -lz
+            -fsanitize=address,undefined -fno-omit-frame-pointer $(LIBCXX) -lz
 
 COV_LIBS  = $(COV_BUILD)/extension/libduckdb_generated_extension_loader.a \
             $(COV_BUILD)/extension/core_functions/libcore_functions_extension.a \
@@ -24,7 +31,7 @@ COV_LIBS  = $(COV_BUILD)/extension/libduckdb_generated_extension_loader.a \
             $(COV_BUILD)/extension/json/libjson_extension.a \
             $(COV_BUILD)/third_party/utf8proc/libduckdb_utf8proc.a \
             $(COV_BUILD)/src/libduckdb_static.a \
-            -fprofile-instr-generate -fcoverage-mapping -lc++ -lz
+            -fprofile-instr-generate -fcoverage-mapping $(LIBCXX) -lz
 
 .PHONY: all asan cov main clean test
 
