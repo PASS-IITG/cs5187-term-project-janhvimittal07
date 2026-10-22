@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import resource
 import hashlib
 import json
 import random
@@ -51,7 +52,7 @@ INTERVALS = ["INTERVAL 0 DAY", "INTERVAL 1 MONTH", "INTERVAL (-1) YEAR", "INTERV
 BLOBS = ["''::BLOB", "'\\x00'::BLOB", "NULL"]
 UUIDS = ["'00000000-0000-0000-0000-000000000000'", "NULL"]
 BITS = ["'0'", "'101'", "NULL"]
-LISTS = ["[]", "[NULL]", "[1]", "[1,NULL,3]", "list(range(2049))", "NULL"]
+LISTS = ["[]", "[NULL]", "[1]", "[1,NULL,3]", "range(2049)", "NULL"]
 GENERIC = ["1", "NULL", "'a'", "[1,2]", "{'a': 1}", "0.5", "true", "''"]
 
 NONDET = re.compile(r"random|uuid|now|current_|today|nextval|currval|txid|getenv|version|sleep|setseed|"
@@ -77,6 +78,8 @@ def connect():
     for s in d["pre"]:
         c.execute(s)
     c.execute("SET max_execution_time=20000")      # ms; DuckDB 2.0 setting, replaces a timer thread
+    c.execute("SET memory_limit='1GB'")            # a runaway query errors out instead of taking WSL down
+    c.execute("SET threads=2")
     return c
 
 try:
@@ -220,6 +223,11 @@ def sig_of(kind: str, fn: str, detail: str) -> str:
     return f"{kind}:{fn}:" + hashlib.sha1(re.sub(r"\d+", "N", detail[:140]).encode()).hexdigest()[:10]
 
 
+def _cap_memory() -> None:
+    """Hard 3 GB address-space cap for a worker: DuckDB's memory_limit does not cover every allocation."""
+    resource.setrlimit(resource.RLIMIT_AS, (3 << 30, 3 << 30))
+
+
 def run_chunk(chunk: list[dict], pre: list[str], noopt: str, timeout: float = 240.0) -> list[dict]:
     """Run cases in one child; if it dies or hangs, blame the case after the last progress marker."""
     findings: list[dict] = []
@@ -229,11 +237,12 @@ def run_chunk(chunk: list[dict], pre: list[str], noopt: str, timeout: float = 24
         payload = json.dumps({"pre": pre, "noopt": noopt, "cases": todo})
         try:
             p = subprocess.run([str(devcheck.DEV_PY), "-c", CHILD], input=payload, capture_output=True, text=True,
-                               timeout=timeout, cwd=WORK / "duckdb")
+                               timeout=timeout, cwd=WORK / "duckdb", preexec_fn=_cap_memory)
             out, rc, timed_out = p.stdout, p.returncode, False
+            err = p.stderr.strip().splitlines()[-1][:150] if p.stderr.strip() else ""
         except subprocess.TimeoutExpired as e:
             out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-            rc, timed_out = -999, True
+            rc, timed_out, err = -999, True, ""
         last = None
         finished = False
         for ln in out.splitlines():
@@ -254,7 +263,7 @@ def run_chunk(chunk: list[dict], pre: list[str], noopt: str, timeout: float = 24
             return findings
         culprit = by_id.get(last)
         kind = "timeout" if timed_out else "crash"
-        findings.append({"id": last, "kind": kind, "detail": f"worker {'hung' if timed_out else 'died'} rc={rc}"})
+        findings.append({"id": last, "kind": kind, "detail": f"worker {'hung' if timed_out else 'died'} rc={rc} {err}"})
         if culprit is None:
             return findings
         todo = [c for c in todo if c["id"] > last]
@@ -317,7 +326,9 @@ def main() -> None:
           f"(x{len(a.modes.split(','))} modes) | skipped: {dict(skipped)}", flush=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
-    allopts = oracle.OPTIMIZERS
+    p = subprocess.run([str(devcheck.DEV_PY), "-c", "import duckdb;print(','.join(r[0] for r in duckdb.connect().execute('select name from duckdb_optimizers()').fetchall()))"],
+                       capture_output=True, text=True, timeout=60)
+    allopts = p.stdout.strip().splitlines()[-1].split(",") if p.returncode == 0 and p.stdout.strip() else oracle.OPTIMIZERS
     noopt = "SET disabled_optimizers='" + ",".join(allopts) + "'"
     mode_pre = {"default": [], "vec_vectors": ["SET GLOBAL debug_verification_mode='VERIFY_VECTORS'"],
                 "vec_functions": ["SET GLOBAL debug_verification_mode='VERIFY_FUNCTIONS'"],
