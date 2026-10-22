@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import oracle  # noqa: E402
 import runner  # noqa: E402
+import sweep_oracle  # noqa: E402
 
 WORK = runner.WORK
 OUT = WORK / "results" / "triage"
@@ -306,7 +307,43 @@ def _finish(kind: str, sql: list[str], cfg_name: str, opts: list[str], res, stoc
     return f
 
 
+def _check_on_frozen_data(setup: list[str], query: str, cfg_stmts: list[str]) -> bool:
+    """N8 gate: Determinism gate on frozen data.
+
+    Executes setup once on a single in-memory database, then runs query under
+    default and cfg_stmts on that exact same frozen data. If both produce identical
+    normalized rows, the difference was purely non-deterministic setup taint.
+    Returns True if identical (noise).
+    """
+    import duckdb
+    c = duckdb.connect(":memory:")
+    try:
+        for s in setup:
+            c.execute(s)
+        # 1. Run under default config
+        cur_a = c.cursor()
+        rows_a = sorted(repr(oracle._norm(r)) for r in cur_a.execute(query).fetchall())
+
+        # 2. Run under config B on the exact same database
+        for s in cfg_stmts:
+            c.execute(s)
+        cur_b = c.cursor()
+        rows_b = sorted(repr(oracle._norm(r)) for r in cur_b.execute(query).fetchall())
+        return rows_a == rows_b
+    except Exception:
+        return False
+    finally:
+        c.close()
+
+
 def triage_crash(stmts: list[str], origin: str = "") -> dict | None:
+    # N8 gate: Quick mode for timeouts — avoid burning 5 configs x 60s
+    if "timeout" in origin.lower():
+        r_quick = cli(stmts, CFG["default"], timeout=3.0)
+        if r_quick.outcome != "timeout":
+            print(f"[-] {origin}: dropped (quick mode: timeout did not reproduce within 3s)", flush=True)
+            return None
+
     for name in CRASH_ORDER:
         r = cli(stmts, CFG[name])
         if r.outcome in CRASHY:
@@ -334,12 +371,75 @@ def triage_crash(stmts: list[str], origin: str = "") -> dict | None:
 
 def triage_value(setup: list[str], query: str, kind: str, differs: list[str],
                  origin: str = "") -> dict | None:
+    # N8 gate: Unordered-window filter
+    if sweep_oracle.is_unordered_window(query):
+        print(f"[-] {origin}: dropped (unordered-window filter: window frame without ORDER BY)", flush=True)
+        return None
+
+    # N8 gate: By-design error rules (BITSTRING_AGG requires statistics_propagation)
+    if re.search(r"\bbitstring_agg\b", query, re.I) and any("statistics_propagation" in d or "no_optimizers" in d for d in differs):
+        print(f"[-] {origin}: dropped (by-design error rule: BITSTRING_AGG requires statistics_propagation)", flush=True)
+        return None
+
+    # N8 gate: Setup taint tracking
+    if any(sweep_oracle.NONDET.search(s) for s in setup):
+        print(f"[-] {origin}: dropped (setup taint tracking: setup contains non-deterministic functions)", flush=True)
+        return None
+
+    # N5: Metamorphic oracle triage (NoREC and TLP)
+    if kind in ("norec", "tlp") or "/* vs */" in query:
+        parts = [q.strip() for q in query.split("/* vs */", 1)]
+        if len(parts) != 2:
+            return None
+        q1, q2 = parts
+
+        def _norm_r(row):
+            return [oracle._norm(x) for x in row]
+
+        def bad_meta(sub_setup, cfg_stmts=None):
+            import duckdb
+            c = duckdb.connect(":memory:")
+            try:
+                for s in (cfg_stmts or []):
+                    c.execute(s)
+                for s in sub_setup:
+                    c.execute(s)
+                r1 = [_norm_r(r) for r in c.execute(q1).fetchall()]
+                r2 = [_norm_r(r) for r in c.execute(q2).fetchall()]
+                return r1 != r2
+            except Exception:
+                return False
+            finally:
+                c.close()
+
+        # Verify reproduction under default configuration
+        if not bad_meta(setup):
+            return None
+
+        mn_setup = ddmin(list(setup), bad_meta) if setup else []
+        opts: list[str] = []
+        cfg_name = "default"
+        # Check if disabling optimizers eliminates the divergence
+        if not bad_meta(mn_setup, CFG["no_optimizers"]):
+            opts = min_optimizers(lambda o: bad_meta(mn_setup, disable(o)), list(oracle.OPTIMIZERS))
+
+        final = mn_setup + [f"{q1};\n{q2};"]
+        stock = {"reproduces": True, "kind": kind, "q1": q1, "q2": q2}
+        return _finish(kind, final, cfg_name, opts, None, stock, origin, {
+            "n_statements": len(final),
+            "metamorphic_q1": q1,
+            "metamorphic_q2": q2,
+        })
+
     stmts = setup + [query]
 
     def bad(sub, cfg_b):
         r = stock_replay(sub, [], cfg_b)
         a, b = (r.get("a") or {}).get("last"), (r.get("b") or {}).get("last")
         if not a or not b:
+            return False
+        # N8 gate: by-design error rule — both configs rejected the query
+        if a[0] == "error" and b[0] == "error":
             return False
         if kind == "value":
             return a[0] == "ok" and b[0] == "ok" and a[1] != b[1]
@@ -349,6 +449,12 @@ def triage_value(setup: list[str], query: str, kind: str, differs: list[str],
     if cfg_name is None:
         return None
     cfg = CFG[cfg_name]
+
+    # N8 gate: Determinism gate on frozen data
+    if kind == "value" and _check_on_frozen_data(setup, query, cfg):
+        print(f"[-] {origin}: dropped (determinism gate: identical on frozen data)", flush=True)
+        return None
+
     mn_setup = ddmin(list(setup), lambda s: bad(s + [query], cfg)) if setup else []
     opts: list[str] = []
     if cfg_name == "no_optimizers":

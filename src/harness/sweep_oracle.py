@@ -43,47 +43,75 @@ NOISE_SEED = re.compile(r"pg_catalog|duckdb_|table_function__|information_schema
 NOISE_SQL = re.compile(r"duckdb_|pg_|stats|uuid|random|information_schema|current_|typeof|version\(", re.I)
 
 # N8: By-design error rules — these optimizers change bind-time semantics for certain
-# aggregate functions.  When only the error *class* differs (both sides fail), it is
+# aggregate functions. When only the error *class* differs (both sides fail), it is
 # not a real bug; when one side errors and the other returns rows the NONDET guard
-# already filters the query.  We drop error_diffs where the default config also
-# raised an error (both-error pattern) — this catches the statistics_propagation /
-# BITSTRING_AGG false positives that produced 16 identical junk findings in run 1.
+# already filters the query. We drop error_diffs where the default config also
+# raised an error (both-error pattern) or where BITSTRING_AGG / extract is involved.
 BY_DESIGN_OPTS = re.compile(r"statistics_propagation", re.I)
+SETUP_TAINT_RX = re.compile(
+    r"\b(random|uuid|gen_random_uuid|now|current_(timestamp|time|date)|today|"
+    r"txid_current|setseed|tablesample)\b|\busing\s+sample\b", re.I
+)
 CONFIG_NAMES = list(oracle.CONFIGS)
+
+
+def is_unordered_window(sql: str) -> bool:
+    """N8 gate: Unordered-window filter — window frame without an explicit ORDER BY."""
+    for m in re.finditer(r"\bover\s*\(([^)]+)\)", sql, re.I):
+        clause = m.group(1).lower()
+        if any(w in clause for w in ("rows", "range", "groups")) and "order by" not in clause:
+            return True
+    return False
 
 
 def eligible(sql: str) -> bool:
     if not READONLY.match(sql) or NONDET.search(sql):
         return False
+    if is_unordered_window(sql):
+        return False
     return not (re.search(r"\blimit\b", sql, re.I) and "order by" not in sql.lower())
 
 
 def is_noise(seed: str, sql: str) -> bool:
-    """Return True (and the finding will be silently dropped with a reason printed).
+    """Return True if seed or query is noise (N8 gates).
 
-    Gates implemented (N8):
+    Gates implemented:
     1. Seed-name taint  — seed file path contains known non-deterministic keywords.
     2. SQL taint        — query text contains known non-deterministic functions.
+    3. Unordered window — window functions without ORDER BY in window frame.
+    4. By-design agg    — bitstring_agg requiring statistics_propagation.
     """
     if NOISE_SEED.search(seed):
         return True
     if NOISE_SQL.search(sql):
         return True
+    if is_unordered_window(sql):
+        return True
+    if re.search(r"\bbitstring_agg\b", sql, re.I):
+        return True
     return False
 
 
 def is_bydesign_error_diff(base_result: tuple, differs: list[str],
-                           res: dict, disabled_opts: list[str]) -> bool:
-    """N8 gate: both-error pattern.
+                           res: dict, sql: str = "") -> bool:
+    """N8 gate: By-design error rules.
 
-    If the default config *also* raised an error (just a different class), the
-    discrepancy is by design (e.g. statistics_propagation changes bind-time
-    semantics for BITSTRING_AGG).  Drop such findings.
-    Also drop findings where *all* differing configs are statistics_propagation
-    (the only optimizer that changes bind-time error identity).
+    1. If the default config *also* raised an error (just a different class), both
+       sides rejected the query — not a bug.
+    2. BITSTRING_AGG requires statistics_propagation to determine bitbounds. If that
+       pass is disabled (or no_optimizers is used), a bind-time error is by design.
+    3. EXTRACT on time / empty tables differences.
+    4. If all differing configs are by-design optimizers (statistics_propagation).
     """
-    # If default itself errored, both sides failed — not a real bug
+    # If default itself errored, both sides failed
     if base_result[0] == "error":
+        return True
+    # BITSTRING_AGG requires statistics_propagation
+    if re.search(r"\bbitstring_agg\b", sql, re.I):
+        if any("statistics_propagation" in d or "no_optimizers" in d for d in differs):
+            return True
+    # EXTRACT bind error vs runtime
+    if re.search(r"\bextract\b", sql, re.I) and any("no_optimizers" in d for d in differs):
         return True
     # If all differing configs are by-design-only optimizers, suppress
     if differs and all(BY_DESIGN_OPTS.search(d) for d in differs):
@@ -104,7 +132,9 @@ def _call(con, sql: str, secs: float, want_rows: bool):
         t.cancel()
 
 
-def run_seed(path: Path, secs: float = 20.0) -> dict:
+def run_seed(path: Path, secs: float = 20.0,
+             check_norec: bool = False, check_tlp: bool = False,
+             metamorphic_limit: int = 5) -> dict:
     import duckdb
     stmts = runner.split_statements(path.read_text(errors="replace"))
     cons = {}
@@ -114,7 +144,10 @@ def run_seed(path: Path, secs: float = 20.0) -> dict:
             c.execute(s)
         cons[name] = c
     checked, found = 0, []
+    setup_tainted = False
     for idx, s in enumerate(stmts):
+        if not READONLY.match(s) and SETUP_TAINT_RX.search(s):
+            setup_tainted = True
         want = eligible(s)
         res = {n: _call(c, s, secs, want) for n, c in cons.items()}
         checked += want and res["default"][0] == "ok"
@@ -130,20 +163,86 @@ def run_seed(path: Path, secs: float = 20.0) -> dict:
         if internal:
             kind, bad = "internal", internal
         elif vdiff:
+            # N8: Setup taint tracking — tainted setups cannot produce valid value differences
+            if setup_tainted:
+                continue
             kind, bad = "value", vdiff
         elif diff:
             # N8: by-design error rule — suppress both-error and by-design-optimizer diffs
-            if is_bydesign_error_diff(base, diff, res, []):
+            if is_bydesign_error_diff(base, diff, res, s):
                 continue
             kind, bad = "error_diff", diff
         else:
             continue
         found.append({"kind": kind, "idx": idx, "sql": s[:2000], "differs": bad,
                       "detail": {n: str(res[n][1:])[:200] for n in ["default"] + bad}})
+
+    # N5: Metamorphic Oracles (NoREC & TLP) over tables created by the seed
+    if (check_norec or check_tlp) and not setup_tainted:
+        c_default = cons.get("default")
+        if c_default:
+            try:
+                schema = oracle.extract_schema(c_default)
+                for tname, cols in schema.items():
+                    try:
+                        c_default.execute(f'SELECT 1 FROM "{tname}" LIMIT 1')
+                    except Exception:
+                        continue
+                    preds = oracle.generate_predicates(cols, max_predicates=metamorphic_limit)
+                    for pred in preds:
+                        if check_norec:
+                            for opt_q, ref_q, agg_desc in oracle.generate_norec_pairs(tname, pred, cols):
+                                r_opt = _call(c_default, opt_q, secs, True)
+                                r_ref = _call(c_default, ref_q, secs, True)
+                                checked += 1
+                                if r_opt[0] == "ok" and r_ref[0] == "ok":
+                                    if r_opt[1] != r_ref[1]:
+                                        found.append({
+                                            "kind": "norec",
+                                            "idx": len(stmts),
+                                            "sql": f"{opt_q}  /* vs */  {ref_q}",
+                                            "differs": ["norec_mismatch"],
+                                            "detail": {"opt": r_opt[1], "ref": r_ref[1], "predicate": pred, "agg": agg_desc}
+                                        })
+                                elif r_opt[0] != r_ref[0]:
+                                    found.append({
+                                        "kind": "norec",
+                                        "idx": len(stmts),
+                                        "sql": f"{opt_q}  /* vs */  {ref_q}",
+                                        "differs": ["norec_error_diff"],
+                                        "detail": {"opt": r_opt, "ref": r_ref, "predicate": pred, "agg": agg_desc}
+                                    })
+                        if check_tlp:
+                            whole_q, parts_q = oracle.generate_tlp_pairs(f'"{tname}"', pred, mode="count")
+                            r_whole = _call(c_default, whole_q, secs, True)
+                            r_parts = _call(c_default, parts_q, secs, True)
+                            checked += 1
+                            if r_whole[0] == "ok" and r_parts[0] == "ok":
+                                if r_whole[1] != r_parts[1]:
+                                    found.append({
+                                        "kind": "tlp",
+                                        "idx": len(stmts),
+                                        "sql": f"{whole_q}  /* vs */  {parts_q}",
+                                        "differs": ["tlp_mismatch"],
+                                        "detail": {"whole": r_whole[1], "parts": r_parts[1], "predicate": pred}
+                                    })
+                            elif r_whole[0] != r_parts[0]:
+                                found.append({
+                                    "kind": "tlp",
+                                    "idx": len(stmts),
+                                    "sql": f"{whole_q}  /* vs */  {parts_q}",
+                                    "differs": ["tlp_error_diff"],
+                                    "detail": {"whole": r_whole, "parts": r_parts, "predicate": pred}
+                                })
+            except Exception:
+                pass
+
     return {"seed": path.name, "stmts": len(stmts), "checked": int(checked), "found": found,
             "internal": sum(f["kind"] == "internal" for f in found),
             "value_mismatches": sum(f["kind"] == "value" for f in found),
-            "error_diffs": sum(f["kind"] == "error_diff" for f in found)}
+            "error_diffs": sum(f["kind"] == "error_diff" for f in found),
+            "norec_mismatches": sum(f["kind"] == "norec" for f in found),
+            "tlp_mismatches": sum(f["kind"] == "tlp" for f in found)}
 
 
 def main() -> None:
@@ -152,9 +251,18 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=240)
+    ap.add_argument("--norec", action="store_true", help="Run NoREC metamorphic checks on seed tables")
+    ap.add_argument("--tlp", action="store_true", help="Run TLP metamorphic checks on seed tables")
+    ap.add_argument("--metamorphic", action="store_true", help="Run both NoREC and TLP checks")
+    ap.add_argument("--metamorphic-limit", type=int, default=5, help="Max generated predicates per table")
     a = ap.parse_args()
     if a.one:
-        print(json.dumps(run_seed(Path(a.one))))
+        print(json.dumps(run_seed(
+            Path(a.one),
+            check_norec=a.norec or a.metamorphic,
+            check_tlp=a.tlp or a.metamorphic,
+            metamorphic_limit=a.metamorphic_limit,
+        )))
         return
 
     seeds = sorted((WORK / "corpus" / "seeds").glob("*.sql"))
@@ -164,8 +272,17 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     def work(p: Path) -> dict:
+        cmd = [sys.executable, __file__, "--one", str(p)]
+        if a.norec:
+            cmd.append("--norec")
+        if a.tlp:
+            cmd.append("--tlp")
+        if a.metamorphic:
+            cmd.append("--metamorphic")
+        if a.metamorphic_limit != 5:
+            cmd.extend(["--metamorphic-limit", str(a.metamorphic_limit)])
         try:
-            r = subprocess.run([sys.executable, __file__, "--one", str(p)], capture_output=True,
+            r = subprocess.run(cmd, capture_output=True,
                                text=True, timeout=a.timeout, cwd=WORK / "duckdb")
             if r.returncode != 0:
                 return {"seed": p.name, "died": r.returncode, "tail": r.stderr[-400:]}
@@ -181,13 +298,14 @@ def main() -> None:
         for i, row in enumerate(ex.map(work, seeds), 1):
             fh.write(json.dumps(row) + "\n")
             fh.flush()
-            for k in ("checked", "internal", "value_mismatches", "error_diffs"):
+            for k in ("checked", "internal", "value_mismatches", "error_diffs", "norec_mismatches", "tlp_mismatches"):
                 tot[k] += row.get(k, 0)
             for k in ("died", "timeout", "error"):
                 if k in row:
                     tot[k] += 1
-            if row.get("internal") or "died" in row:
-                print(f"[{i}] {row['seed']}  internal={row.get('internal')} died={row.get('died')}", flush=True)
+            if row.get("internal") or "died" in row or row.get("norec_mismatches") or row.get("tlp_mismatches"):
+                print(f"[{i}] {row['seed']}  internal={row.get('internal')} died={row.get('died')} "
+                      f"norec={row.get('norec_mismatches')} tlp={row.get('tlp_mismatches')}", flush=True)
             if i % 200 == 0:
                 print(f"... {i}/{len(seeds)} {dict(tot)} {time.time()-t0:.0f}s", flush=True)
     print(json.dumps({"seeds": len(seeds), **tot, "secs": round(time.time() - t0)}))
