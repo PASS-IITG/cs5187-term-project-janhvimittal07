@@ -29,18 +29,24 @@ import runner  # noqa: E402
 
 INTERESTING = ("internal_error", "asan", "crash")
 RESOURCE = re.compile(r"hard rss limit|rss limit exhausted|out-of-memory|requested allocation size|allocator is out of memory|"
-                      r"failed to allocate|cannot allocate memory", re.I)
+                      r"allocation-size-too-big|exceeds maximum supported size|failed to allocate|cannot allocate memory|"
+                      r"Out of Memory Error|\bKilled\b", re.I)
 CONFIRM_ENV = {"ASAN_OPTIONS": "detect_leaks=0:abort_on_error=0:symbolize=1:allocator_may_return_null=0"}
 
 
+def is_resource(r: "runner.Result") -> bool:
+    """A cgroup/OOM kill (SIGKILL) or an allocation-failure report is a resource artifact, not a DuckDB bug."""
+    return r.returncode in (-9, 137) or bool(RESOURCE.search(r.stderr + "\n" + r.stdout))
+
+
 def confirm(sql: str) -> str:
-    """Replay one finding alone, without the resource caps of the batch run."""
+    """Replay one finding alone, without the resource caps of the batch run (still inside the systemd scope)."""
     try:
         r = runner.run_sql(sql, build="asan", timeout=120, env_extra=CONFIRM_ENV)
     except Exception as e:                                   # noqa: BLE001
         return f"confirm failed: {e}"
     if r.outcome in INTERESTING:
-        return "reproduces alone"
+        return "resource artifact (confirm)" if is_resource(r) else "reproduces alone"
     return f"NOT reproducible alone ({r.outcome})"
 
 
@@ -71,6 +77,8 @@ def main() -> None:
     batch: list[tuple[str, str]] = []
     n = 0
 
+    meta: dict[str, str] = {}
+
     def flush() -> None:
         nonlocal done
         if not batch:
@@ -81,12 +89,14 @@ def main() -> None:
             if r.outcome not in INTERESTING:
                 continue
             sig = r.signature or r.outcome
+            if r.outcome in ("asan", "crash") and not runner._frames(r.stderr + r.stdout):
+                sig = f"{r.outcome}:noframes:{meta.get(qid, qid)}"      # no stack in the report: do not collapse all crashes
             if sig in seen:
                 counts["dup:" + r.outcome] += 1
                 continue
             seen.add(sig)
             text = r.stderr + r.stdout
-            verdict = "resource artifact" if RESOURCE.search(text) else confirm(sql)
+            verdict = "resource artifact" if is_resource(r) else confirm(sql)
             rec = {"id": qid, "outcome": r.outcome, "signature": sig, "verdict": verdict, "sql": sql[-1500:],
                    "evidence": " | ".join(r.errors[:2]) or text[:400]}
             with hits_path.open("a") as fh:
@@ -106,6 +116,7 @@ def main() -> None:
             if n <= done:
                 continue
             o = json.loads(line)
+            meta[o["id"]] = o.get("fn") or o.get("title", "")[:40]
             batch.append((o["id"], o["sql"]))
             if len(batch) >= a.chunk:
                 flush()
