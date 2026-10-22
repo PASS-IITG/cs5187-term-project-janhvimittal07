@@ -253,10 +253,37 @@ class CampaignRunner:
     # Generation Steps
     # -----------------------------------------------------------------------
 
+    def _sqlsmith_template_db(self) -> Path | None:
+        """Build the seed schema once into a database file; None if that fails (callers fall back to a prelude)."""
+        if getattr(self, "_sqlsmith_template_path", False) is not False:
+            return self._sqlsmith_template_path
+        self._sqlsmith_template_path = None
+        if not self.sqlsmith_setup:
+            return None
+        path = CAMPAIGN_DIR / "sqlsmith_template.db"
+        try:
+            import duckdb
+            CAMPAIGN_DIR.mkdir(parents=True, exist_ok=True)
+            for p in (path, Path(str(path) + ".wal")):
+                p.unlink(missing_ok=True)
+            con = duckdb.connect(str(path))
+            for stmt in self.sqlsmith_setup:
+                try:
+                    con.execute(stmt)
+                except Exception:
+                    pass
+            con.close()
+            self._sqlsmith_template_path = path
+        except Exception as e:                            # noqa: BLE001
+            print(f"    ! template database unavailable ({e}); using per-query prelude")
+        return self._sqlsmith_template_path
+
     def _step_sqlsmith(self) -> None:
         if not self.sqlsmith_gen or not self.sqlsmith_gen.schema:
             return
-        prelude_sql = "\n".join(self.sqlsmith_setup) + "\n" if self.sqlsmith_setup else ""
+        template = self._sqlsmith_template_db()
+        # with a prebuilt database the schema is not rebuilt for every query (that was ~1 s per query)
+        prelude_sql = "" if template else ("\n".join(self.sqlsmith_setup) + "\n" if self.sqlsmith_setup else "")
         chunk = []
         raw_queries = []
         for _ in range(self.batch_size):
@@ -271,7 +298,15 @@ class CampaignRunner:
             return
 
         t0 = time.time()
-        res = runner.run_batch(chunk, build=self.state.build, timeout=10.0, isolate=True)
+        if template:
+            import shutil
+            batch_db = CAMPAIGN_DIR / "sqlsmith_batch.db"
+            for p in (batch_db, Path(str(batch_db) + ".wal")):
+                p.unlink(missing_ok=True)
+            shutil.copy(template, batch_db)             # fresh copy per batch: DML/DDL cannot leak across batches
+            res = runner.run_batch(chunk, build=self.state.build, timeout=10.0, isolate=False, db=str(batch_db))
+        else:
+            res = runner.run_batch(chunk, build=self.state.build, timeout=10.0, isolate=True)
         dur = time.time() - t0
 
         for (qid, r), q_text in zip(res, raw_queries):

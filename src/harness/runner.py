@@ -159,7 +159,8 @@ def find_culprit(setup: str, stmts: list[str], build: str = "asan", timeout: flo
 
 
 def run_batch(items: list[tuple[str, str]], build: str = "asan", timeout: float = 30.0,
-              isolate: bool = True, capture_stdout: bool = False) -> list[tuple[str, Result]]:
+              isolate: bool = True, capture_stdout: bool = False,
+              db: str | None = None) -> list[tuple[str, Result]]:
     """Run a batch of (id, sql) queries using the fast in-process batch driver.
 
     Falls back automatically to run_sql() if the driver binary is not compiled.
@@ -175,6 +176,8 @@ def run_batch(items: list[tuple[str, str]], build: str = "asan", timeout: float 
         cmd.append("--no-isolate")
     if capture_stdout:
         cmd.append("--capture-stdout")
+    if db:
+        cmd += ["--db", str(db)]       # pre-populated database: callers skip the per-query setup script
 
     lines = []
     for qid, sql in items:
