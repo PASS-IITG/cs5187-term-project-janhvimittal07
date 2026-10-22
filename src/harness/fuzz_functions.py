@@ -280,6 +280,7 @@ def main() -> None:
     ap.add_argument("--only", default="", help="regex: only functions whose name matches")
     ap.add_argument("--limit-functions", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--emit-jsonl", default="", help="write every query (per mode and variant) as JSONL for asan_replay.py and exit")
     a = ap.parse_args()
 
     ok, detail = devcheck.setting_works("VERIFY_VECTORS")
@@ -332,7 +333,24 @@ def main() -> None:
     noopt = "SET disabled_optimizers='" + ",".join(allopts) + "'"
     mode_pre = {"default": [], "vec_vectors": ["SET GLOBAL debug_verification_mode='VERIFY_VECTORS'"],
                 "vec_functions": ["SET GLOBAL debug_verification_mode='VERIFY_FUNCTIONS'"],
-                "vec_serialization": ["SET GLOBAL debug_verification_mode='VERIFY_SERIALIZATION'"]}
+                "vec_serialization": ["SET GLOBAL debug_verification_mode='VERIFY_SERIALIZATION'"],
+                "enable_verification": ["PRAGMA enable_verification"]}
+    if a.emit_jsonl:
+        n = 0
+        with open(a.emit_jsonl, "w") as out:
+            for m in a.modes.split(","):
+                pre = "".join(x.rstrip(";") + ";\n" for x in mode_pre[m])
+                for c in cases:
+                    qs = [("A", c["qA"], "")]
+                    if c["kind"] == "scalar":
+                        qs += [("B", c["qB"], noopt + ";\n"), ("C", c["qC"], "")]
+                    else:
+                        qs += [(k[1], c[k], "") for k in ("qB", "qC") if c.get(k)]
+                    for v, q, extra in qs:
+                        out.write(json.dumps({"id": f"{m}:{c['id']}:{v}", "fn": c["fn"], "sql": pre + extra + q.rstrip(";") + ";\n"}) + "\n")
+                        n += 1
+        print(f"wrote {n} queries to {a.emit_jsonl}")
+        return
     jobs = []
     for m in a.modes.split(","):
         for i in range(0, len(cases), a.chunk):
