@@ -226,7 +226,10 @@ def run_seed(path: Path, secs: float = 20.0,
                                         "differs": ["tlp_mismatch"],
                                         "detail": {"whole": r_whole[1], "parts": r_parts[1], "predicate": pred}
                                     })
-                            elif r_whole[0] != r_parts[0]:
+                            elif r_whole[0] != r_parts[0] and any(
+                                    r[0] == "error" and (r[1] == "InternalException" or "INTERNAL" in r[2])
+                                    for r in (r_whole, r_parts)):
+                                # whole query never evaluates the predicate: only INTERNAL errors are bugs
                                 found.append({
                                     "kind": "tlp",
                                     "idx": len(stmts),

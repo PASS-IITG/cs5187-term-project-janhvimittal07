@@ -408,7 +408,10 @@ def check_tlp(table_query: str, predicate: str, setup: list[str] | None = None,
                 outputs={"whole": out_whole, "parts": out_parts, "predicate": predicate}
             )
         return DiffResult(sql=whole, mismatch=False, outputs={"whole": out_whole, "parts": out_parts})
-    elif out_whole[0] != out_parts[0]:
+    elif out_whole[0] != out_parts[0] and any(
+            o[0] == "error" and (o[1] == "InternalException" or "INTERNAL" in str(o[2:])) for o in (out_whole, out_parts)):
+        # only INTERNAL errors count: the whole query never evaluates the predicate, so an invalid or
+        # failing predicate (binder / conversion / overflow error) legitimately errors in the partitions only
         return DiffResult(
             sql=f"{whole}  /* vs */  {parts}",
             mismatch=True,
