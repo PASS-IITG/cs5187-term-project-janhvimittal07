@@ -60,6 +60,9 @@ def main() -> None:
     ap.add_argument("--keep-boilerplate", action="store_true")
     a = ap.parse_args()
 
+    for tag in (a.old, a.new):
+        if subprocess.run(["git", "-C", a.repo, "rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}"], capture_output=True).returncode != 0:
+            raise SystemExit(f"tag {tag} is missing in {a.repo} (shallow clone?): git -C {a.repo} fetch --depth 1 origin tag {tag}")
     hints = json.loads(Path(a.hints).read_text())
     files = sorted({h["file"] for h in hints})
     idx = changed_lines(Path(a.repo), a.old, a.new, files)

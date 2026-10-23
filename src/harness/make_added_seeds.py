@@ -35,6 +35,8 @@ def main() -> None:
     if cur != a.new:
         sys.exit(f"{src} is at {cur!r}, expected {a.new}: git -C {src} checkout {a.new}")
 
+    if subprocess.run(["git", "-C", str(src), "rev-parse", "--verify", "--quiet", f"{a.old}^{{commit}}"], capture_output=True).returncode != 0:
+        sys.exit(f"tag {a.old} is missing (setup.sh makes a shallow clone with one tag): git -C {src} fetch --depth 1 origin tag {a.old}")
     full = WORK / "corpus" / f"seeds-v{a.new.lstrip('v').replace('.', '')}"
     shutil.rmtree(full, ignore_errors=True)
     extract_seeds.OUT = full

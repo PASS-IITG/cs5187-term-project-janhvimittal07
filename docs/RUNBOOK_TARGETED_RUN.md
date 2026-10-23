@@ -22,6 +22,8 @@ git pull                                              # this repo, main
 export FUZZ_WORK=$HOME/cs5187                         # heavy artifacts live here, not in git
 cd $FUZZ_WORK && git clone https://github.com/duckdb/duckdb.git duckdb   # or reuse; then:
 git -C $FUZZ_WORK/duckdb fetch --tags && git -C $FUZZ_WORK/duckdb checkout v2.0.0
+# setup.sh makes a SHALLOW clone with only that tag; the "what is new" tools diff against 1.5.6, so also fetch it:
+git -C $FUZZ_WORK/duckdb fetch --depth 1 origin tag v1.5.6
 python3 -m venv $FUZZ_WORK/.venv     && $FUZZ_WORK/.venv/bin/pip install -r src/requirements.txt   # duckdb==2.0.0
 python3 -m venv $FUZZ_WORK/.venv-dev && $FUZZ_WORK/.venv-dev/bin/pip install duckdb==2.0.0         # generators' workers
 # sanitizer build from the v2.0.0 source (about an hour; 3 jobs, ~7 GB RAM; do not run other heavy jobs meanwhile)
