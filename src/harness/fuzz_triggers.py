@@ -37,6 +37,7 @@ import runner  # noqa: E402
 WORK = runner.WORK
 OUT = WORK / "results" / "triggers"
 
+AVOID_KNOWN = True      # see build(): skip the cascade pattern of duckdb/duckdb#27759
 TABLE_VARIANTS = [
     "id INTEGER, val VARCHAR, n INTEGER",
     "id INTEGER PRIMARY KEY, val VARCHAR, n INTEGER",
@@ -125,6 +126,18 @@ def build(rng: random.Random) -> dict:
         trg = f"CREATE TRIGGER trg{i} {timing} {event}{upd_of} ON {tbl} {ref} FOR EACH {level} {body}".replace("  ", " ")
         triggers.append({"name": f"trg{i}", "tbl": tbl, "timing": timing, "event": event, "level": level,
                          "ref": ref, "body": body, "sql": trg, "of": upd_of.replace(" OF ", "").strip()})
+    # #27759: a ROW trigger that cascades into a table with a BEFORE INSERT statement trigger raises an INTERNAL error;
+    # drop such BEFORE triggers (unless --keep-known) so the run explores everything else
+    if AVOID_KNOWN:
+        row_targets = set()
+        for tg in triggers:
+            m = re.match(r"INSERT INTO (\w+)", tg["body"])
+            if tg["level"] == "ROW" and m and m.group(1) in ("t", "u") and m.group(1) != tg["tbl"]:
+                row_targets.add(m.group(1))
+        triggers = [tg for tg in triggers if not (tg["timing"] == "BEFORE" and tg["event"] == "INSERT" and tg["tbl"] in row_targets)]
+        if not triggers:
+            triggers = [{"name": "trg0", "tbl": "t", "timing": "AFTER", "event": "INSERT", "level": "STATEMENT", "ref": "",
+                         "body": "INSERT INTO l1 VALUES ('s', 0, 'x', 0)", "sql": "CREATE TRIGGER trg0 AFTER INSERT ON t FOR EACH STATEMENT INSERT INTO l1 VALUES ('s', 0, 'x', 0)", "of": ""}]
     steps = []
     for _ in range(rng.randint(3, 8)):
         tn = rng.choice(["t", "t", "u"])
@@ -408,7 +421,10 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--chunk", type=int, default=50)
     ap.add_argument("--show", type=int, default=0, help="print N generated cases and exit")
+    ap.add_argument("--keep-known", action="store_true", help="also generate the known #27759 cascade pattern")
     a = ap.parse_args()
+    global AVOID_KNOWN
+    AVOID_KNOWN = not a.keep_known
     rng = random.Random(a.seed)
     cases = [dict(build(rng), id=i) for i in range(a.n)]
     if a.show:

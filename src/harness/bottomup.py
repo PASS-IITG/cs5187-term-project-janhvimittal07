@@ -134,7 +134,12 @@ for case in d["cases"]:
     c.execute(d["noopt"])
     kb, b = run(case["q"])
     c.execute("RESET disabled_optimizers")
-    for k, v, var in ((ka, a, "A"), (kb, b, "B")):
+    # delim_join_as_cte (new in 2.0, default true) rewrites every dependent join (correlated subquery) into materialized
+    # CTEs; DuckDB's CI runs its suite with it off, but not generated / nested queries. Results must not depend on it.
+    c.execute("SET delim_join_as_cte=false")
+    kc, cc = run(case["q"])
+    c.execute("SET delim_join_as_cte=true")
+    for k, v, var in ((ka, a, "A"), (kb, b, "B"), (kc, cc, "C")):
         if k in ("internal", "fatal"):
             emit({"id": case["id"], "kind": k, "variant": var, "detail": v})
     if "fatal" in (ka, kb):
@@ -142,6 +147,10 @@ for case in d["cases"]:
         for s in d["setup"]:
             c.execute(s)
         continue
+    if ka == "ok" and kc == "ok" and a != cc and "POSITIONAL" not in case["q"]:
+        emit({"id": case["id"], "kind": "delimcte_diff", "detail": "delim_join_as_cte on %d rows %s | off %d rows %s" % (len(a), a[:3], len(cc), cc[:3])})
+    elif (ka == "ok") != (kc == "ok") and "internal" not in (ka, kc) and "Out of Memory" not in str(a) + str(cc):
+        emit({"id": case["id"], "kind": "delimcte_error_diff", "detail": "cte-on=%s | cte-off=%s" % (str(a)[:110], str(cc)[:110])})
     if ka == "ok" and kb == "ok" and a != b and "POSITIONAL" not in case["q"]:   # positional pairing depends on unordered input
         emit({"id": case["id"], "kind": "value_diff", "detail": "opt-on %d rows %s | opt-off %d rows %s" % (len(a), a[:3], len(b), b[:3])})
     elif (ka == "ok") != (kb == "ok") and "internal" not in (ka, kb) and "Out of Memory" not in str(a) + str(b):
