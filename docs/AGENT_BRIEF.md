@@ -101,8 +101,10 @@ The engine, not you, judges every generator (`harness/gen_runner.py`); nothing y
 6. *Scale:* `PY src/harness/gen_runner.py run $FUZZ_WORK/generators/<name>.py --n 3000 --seed S` for several seeds `S`. Every case runs under
    five configurations on fresh connections (default, `delim_join_as_cte=false`, the target switch off, `threads=1`, `enable_verification`); it
    flags INTERNAL errors, crashes and results that differ between configurations. Hits land in `results/targeted/gens/<name>/hits.jsonl`.
-7. Run the replay on the ASan build for the best generators (one heavy job at a time): see the `asan_replay.py --sql-dir` option, fed with
-   a few hundred cases written out by the generator, or simply let `targeted_run.py --report-only` verify the hits.
+7. *Memory bugs:* for the best generators write cases out and replay them on the sanitizer build (one heavy job at a time):
+   `PY src/harness/gen_runner.py dump $FUZZ_WORK/generators/<name>.py --n 300 --seed S --out $FUZZ_WORK/corpus/llm/agent` then
+   `PY src/harness/asan_replay.py --sql-dir $FUZZ_WORK/corpus/llm/agent --out $FUZZ_WORK/results/targeted/asan-agent`.
+   Finally `PY src/harness/targeted_run.py --report-only` verifies every hit alone on all builds and searches upstream.
 
 **Second track - fix dossiers (variant hunting).** Run `PY src/harness/fix_dossiers.py --refs origin/main --limit 80`. Each file in
 `results/targeted/dossiers/` is a bug that upstream FIXED after 2.0.0 (so it exists in 2.0.0 and is known; never report it) with the

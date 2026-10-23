@@ -7,6 +7,7 @@ author of the generator; this runner is the oracle and the judge. Nothing the mo
     python harness/gen_runner.py check  GEN.py                 # AST allowlist + 30-case dry run + validity report
     python harness/gen_runner.py run    GEN.py --n 2000 --seed 1   # full run -> results/targeted/gens/<name>/
     python harness/gen_runner.py feedback GEN.py                # prints the feedback file for the next LLM round
+    python harness/gen_runner.py dump   GEN.py --n 300 --out DIR   # write cases as .sql scripts (for asan_replay.py --sql-dir DIR)
 
 GENERATOR CONTRACT (a plain python file, pure and deterministic per seed):
 
@@ -390,7 +391,7 @@ def feedback_text(m: dict) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["check", "run", "feedback"])
+    ap.add_argument("cmd", choices=["check", "run", "feedback", "dump"])
     ap.add_argument("gen")
     ap.add_argument("--n", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=1)
@@ -401,6 +402,25 @@ def main() -> None:
         name = json.loads(path.read_text() and "{}") if False else None
         d = OUT / re.sub(r"[^\w-]", "_", path.stem)
         print((d / "feedback.md").read_text() if (d / "feedback.md").exists() else "no feedback yet: run the generator first")
+        return
+    if a.cmd == "dump":
+        src = path.read_text()
+        bad = static_check(src)
+        if bad:
+            print("REJECTED:"); [print("  -", r) for r in bad]
+            sys.exit(2)
+        gen = generate_cases(src, list(range(a.seed * 100_000, a.seed * 100_000 + a.n)))
+        name = re.sub(r"[^\w-]", "_", str((gen.get("meta") or {}).get("name") or path.stem))
+        d = Path(a.out) if a.out else WORK / "corpus" / "llm" / f"gen-{name}"
+        d.mkdir(parents=True, exist_ok=True)
+        k = 0
+        for c in gen["cases"]:
+            if "error" in c or not c["queries"]:
+                continue
+            body = ";\n".join(c["setup"]) + ";\n" + ";\n".join(q["sql"].rstrip(";") for q in c["queries"]) + ";\n"
+            (d / f"{name}__{c['seed']}.sql").write_text(body)
+            k += 1
+        print(f"wrote {k} scripts to {d}")
         return
     n = 30 if a.cmd == "check" else a.n
     m = run_generator(path, n, a.seed, Path(a.out) if a.out else (OUT / "_check" if a.cmd == "check" else None))
