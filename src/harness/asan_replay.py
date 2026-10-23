@@ -54,7 +54,8 @@ def confirm(sql: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input", required=True)
+    ap.add_argument("--input", default="", help="JSONL of {id, sql}")
+    ap.add_argument("--sql-dir", default="", help="directory of .sql scripts instead of --input (each run plain and under enable_verification)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--timeout", type=float, default=10.0)
@@ -62,6 +63,23 @@ def main() -> None:
     ap.add_argument("--fresh", action="store_true", help="ignore progress.json")
     ap.add_argument("--reconfirm", action="store_true", help="re-run confirm() on every hit in --out/hits.jsonl and rewrite the verdicts")
     a = ap.parse_args()
+
+    if a.sql_dir:
+        Path(a.out).mkdir(parents=True, exist_ok=True)
+        a.input = str(Path(a.out) / "input.jsonl")
+        n_scripts = 0
+        with open(a.input, "w") as fh:
+            for f in sorted(Path(a.sql_dir).glob("*.sql")):
+                body = f.read_text(errors="replace")
+                if len(body) > 200_000:
+                    continue
+                n_scripts += 1
+                for tag, pre in (("plain", ""), ("verify", "PRAGMA enable_verification;\n")):
+                    fh.write(json.dumps({"id": f"{f.stem}:{tag}", "fn": f.stem[:40],
+                                         "sql": "SET enable_external_access=false;\n" + pre + body + "\n"}) + "\n")
+        print(f"{n_scripts} scripts from {a.sql_dir} -> {2 * n_scripts} replays", flush=True)
+    if not a.input and not a.reconfirm:
+        sys.exit("give --input FILE.jsonl or --sql-dir DIR")
 
     if a.reconfirm:
         hp = Path(a.out) / "hits.jsonl"
