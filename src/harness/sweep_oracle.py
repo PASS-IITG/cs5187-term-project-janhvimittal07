@@ -251,6 +251,8 @@ def run_seed(path: Path, secs: float = 20.0,
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--one")
+    ap.add_argument("--seeds", default="", help="seed directory (default: corpus/seeds)")
+    ap.add_argument("--out", default="", help="results file (default: results/sweep-oracle.jsonl)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=float, default=240)
@@ -268,10 +270,10 @@ def main() -> None:
         )))
         return
 
-    seeds = sorted((WORK / "corpus" / "seeds").glob("*.sql"))
+    seeds = sorted((Path(a.seeds) if a.seeds else WORK / "corpus" / "seeds").glob("*.sql"))
     if a.limit:
         seeds = seeds[:a.limit]
-    out = WORK / "results" / "sweep-oracle.jsonl"
+    out = Path(a.out) if a.out else WORK / "results" / "sweep-oracle.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     def work(p: Path) -> dict:

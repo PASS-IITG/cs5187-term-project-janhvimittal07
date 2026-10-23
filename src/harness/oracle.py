@@ -61,6 +61,10 @@ CONFIGS: dict[str, list[str]] = {
     "many_threads": ["SET threads=8"],
     "no_insertion_order": ["SET preserve_insertion_order=false"],
 }
+# settings that must never change a result and that upstream CI does not run its suite under (it covers
+# disable_optimizer, delim_join_as_cte, force_external, ...): forced approximate join ordering and verification mode
+CONFIGS["approx_join_order"] = ["SET approximate_join_order_threshold=2"]
+CONFIGS["verify"] = ["PRAGMA enable_verification"]
 if NEW_OPTIMIZERS:      # compare against a run with only the brand-new optimizers switched off
     CONFIGS["no_new_optimizers"] = _disable(NEW_OPTIMIZERS)
 # one config per optimizer: isolates which pass causes a mismatch
