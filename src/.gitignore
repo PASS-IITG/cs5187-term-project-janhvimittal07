@@ -16,3 +16,6 @@ gen/out/
 driver/driver*
 driver/*.o
 driver/*.dSYM
+
+# DuckDB spill / temp directories created when running from src/
+.tmp/
