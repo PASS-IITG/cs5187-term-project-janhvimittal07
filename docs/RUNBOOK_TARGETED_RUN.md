@@ -113,3 +113,15 @@ You are assisting a DuckDB 2.0.0 bug hunt. Work only inside $FUZZ_WORK and the r
 A verified, upstream-checked finding goes to the team first. One person files it, using `docs/upstream-drafts/` as the
 template (title, minimal reproducer + output in separate code blocks, versions incl. source id, workaround, stack trace
 from the ASan build, related-but-different issues). Record the issue number in the notes and the paper.
+
+## 7. Coverage of the new code (for the paper)
+The proposal promised coverage improvements. Build the coverage binary from the SAME release (`rm -rf $FUZZ_WORK/build-cov &&
+FUZZ_WORK=$FUZZ_WORK JOBS=3 bash src/build.sh cov`, about 1 hour, nothing else heavy running; `preflight.py` shows `[PASS] cov`).
+Replay each arm's scripts into its own work dir and ask for the coverage of the lines added/changed since 1.5.6:
+```bash
+PY src/coverage/cov.py run-dir $FUZZ_WORK/corpus/seeds-v200 --workdir $FUZZ_WORK/results/cov-A1        # generic arm
+PY src/coverage/cov.py run-dir $FUZZ_WORK/corpus/llm/agent  --workdir $FUZZ_WORK/results/cov-A4        # LLM-directed arm
+PY src/coverage/cov.py changed --workdir $FUZZ_WORK/results/cov-A4 --json $FUZZ_WORK/results/cov-A4/changed.json
+```
+`cov.py` refuses to run on a build of another release (a stale build gives silently wrong numbers). Details and the arm table: `docs/AGENT_BRIEF.md`
+phase C and `docs/EXPERIMENT_DESIGN.md`.

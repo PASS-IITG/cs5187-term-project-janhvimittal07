@@ -92,10 +92,10 @@ class Coverage:
         self._cached_hints_by_file: dict[str, list[dict]] | None = None
 
     # ---- collection ----
-    def run_and_merge(self, sql: str, timeout: float = 60.0) -> runner.Result:
+    def run_and_merge(self, sql: str, timeout: float = 60.0, cwd: Path | None = None) -> runner.Result:
         with tempfile.TemporaryDirectory(dir=self.dir) as td:
             raw = Path(td) / "%p.profraw"
-            r = runner.run_sql(sql, "cov", timeout, cwd=SRC,
+            r = runner.run_sql(sql, "cov", timeout, cwd=cwd or SRC,
                                env_extra={"LLVM_PROFILE_FILE": str(raw)})
             self.merge_raw(list(Path(td).glob("*.profraw")))
         return r
@@ -161,6 +161,41 @@ class Coverage:
     def _sel(self, filters=None):
         filters = filters or DEFAULT_FILTERS
         return {f: v for f, v in self.lcov().items() if any(f.startswith(p) for p in filters)}
+
+    def changed_coverage(self, old: str = "v1.5.6", new: str = "v2.0.0") -> dict:
+        """Line coverage restricted to the lines added or changed between two releases (the new-in-2.0 code).
+
+        Denominator = executable lines (those llvm-cov reports) inside changed ranges, in files reachable from SQL
+        (generated glue, tree renderers, tpch/tpcds/icu data etc. are excluded: static/new_code_hints.BOILERPLATE)."""
+        sys.path.insert(0, str(CODE / "static"))
+        import new_code_hints as nch
+        ranges = nch.changed_lines(SRC, old, new, ["src", "extension/core_functions", "extension/json", "extension/parquet"])
+        per_sub: dict[str, list[int]] = {}
+        files_cov: list[tuple[str, int, int]] = []
+        tot = cov = 0
+        for f, (lines, _br, _fn) in self.lcov().items():
+            if f not in ranges or nch.BOILERPLATE.search(f):
+                continue
+            rs = ranges[f]
+            t = c = 0
+            for ln, hits in lines.items():
+                i = bisect.bisect_right(rs, (ln, 10 ** 9)) - 1
+                if i >= 0 and rs[i][0] <= ln <= rs[i][1]:
+                    t += 1
+                    c += 1 if hits > 0 else 0
+            if t:
+                sub = "/".join(f.split("/")[:2])
+                acc = per_sub.setdefault(sub, [0, 0])
+                acc[0] += t
+                acc[1] += c
+                tot += t
+                cov += c
+                files_cov.append((f, t, c))
+        files_cov.sort(key=lambda x: -(x[1] - x[2]))
+        return {"old": old, "new": new, "changed_executable_lines": tot, "covered": cov,
+                "pct": round(100.0 * cov / tot, 2) if tot else 0.0,
+                "by_subsystem": {k: {"lines": v[0], "covered": v[1], "pct": round(100.0 * v[1] / v[0], 1)} for k, v in sorted(per_sub.items())},
+                "most_uncovered_files": [{"file": f, "lines": t, "uncovered": t - c} for f, t, c in files_cov[:15]]}
 
     # ---- static hints ingestion ----
     def load_hints(self, hints_path: str | Path | None = None) -> list[dict]:
@@ -502,6 +537,21 @@ class Coverage:
         return content
 
 
+
+def assert_build_version(tag: str = "v2.0.0") -> None:
+    """Refuse to produce coverage numbers from a build of a different release (a stale build gives silently wrong numbers)."""
+    if not BIN.exists():
+        sys.exit(f"{BIN} missing: FUZZ_WORK={WORK} JOBS=3 bash {CODE}/build.sh cov   (about 1 hour, nothing else heavy running)")
+    want = subprocess.run(["git", "-C", str(SRC), "rev-parse", "--short=10", f"{tag}^{{commit}}"], capture_output=True, text=True).stdout.strip()
+    env = {k: v for k, v in os.environ.items() if k not in ("AI_AGENT", "CLAUDECODE", "CLAUDE_CODE", "CURSOR_AGENT")}
+    env["LLVM_PROFILE_FILE"] = "/dev/null"
+    out = subprocess.run([str(BIN), "-no-agent", ":memory:", "-init", "/dev/null", "-csv", "-c", "select (select source_id from pragma_version())"],
+                         capture_output=True, text=True, env=env).stdout
+    if want and want not in out:
+        sys.exit(f"{BIN} is not {tag} ({want}): it reports {out.strip()[-40:]!r}. Rebuild: rm -rf {WORK}/build-cov && "
+                 f"FUZZ_WORK={WORK} JOBS=3 bash {CODE}/build.sh cov")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="llvm-cov ingestion, uncovered regions, and static hint cross-referencing.")
     sub = ap.add_subparsers(dest="cmd", help="Subcommand")
@@ -533,11 +583,55 @@ def main() -> None:
     p_exp.add_argument("--out", default=str(WORK / "results" / "cov" / "REPORT.md"), help="Output markdown path")
     p_exp.add_argument("filters", nargs="*", default=DEFAULT_FILTERS, help="Subsystem path filters")
 
+    # run-dir
+    p_run = sub.add_parser("run-dir", help="Run every .sql in a directory on the coverage build and merge the profiles")
+    p_run.add_argument("dir")
+    p_run.add_argument("--workdir", default=str(WORK / "results" / "cov"), help="coverage work dir (one per experimental arm)")
+    p_run.add_argument("--limit", type=int, default=0)
+    p_run.add_argument("--timeout", type=float, default=60)
+
+    # changed
+    p_chg = sub.add_parser("changed", help="Coverage of the lines added/changed between two releases (the new-in-2.0 code)")
+    p_chg.add_argument("--old", default="v1.5.6")
+    p_chg.add_argument("--new", default="v2.0.0")
+    p_chg.add_argument("--workdir", default=str(WORK / "results" / "cov"))
+    p_chg.add_argument("--json", default="", help="also write the result as JSON")
+
     # Legacy support: no subcmd but args like "report"
-    if len(sys.argv) > 1 and sys.argv[1] not in ("report", "uncovered", "hints", "functions", "export-report", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in ("report", "uncovered", "hints", "functions", "export-report", "run-dir", "changed", "-h", "--help"):
         args = ap.parse_args(["report"] + sys.argv[1:])
     else:
         args = ap.parse_args()
+
+    if args.cmd == "run-dir":
+        assert_build_version()
+        c = Coverage(args.workdir)
+        scratch = WORK / "work-scratch"
+        scratch.mkdir(exist_ok=True)
+        files = sorted(Path(args.dir).glob("*.sql"))
+        if args.limit:
+            files = files[:args.limit]
+        for i, f in enumerate(files, 1):
+            c.run_and_merge(f.read_text(errors="replace"), args.timeout, cwd=scratch)       # scratch cwd: scripts must not write into the source tree
+            if i % 100 == 0:
+                print(f"... {i}/{len(files)} scripts", flush=True)
+        print(f"ran {len(files)} scripts from {args.dir}; profile: {c.profdata}")
+        s = c.summary(DEFAULT_FILTERS)
+        print(f"lines {s['lines_hit']}/{s['lines']} ({s['line_pct']:.2f}%)")
+        return
+    if args.cmd == "changed":
+        assert_build_version(args.new)
+        c = Coverage(args.workdir)
+        if not c.profdata.exists():
+            sys.exit(f"{c.profdata} does not exist: run `cov.py run-dir DIR --workdir {args.workdir}` first")
+        r = c.changed_coverage(args.old, args.new)
+        print(f"coverage of lines added/changed {r['old']}..{r['new']} (SQL-reachable code): {r['covered']}/{r['changed_executable_lines']} = {r['pct']}%")
+        for k, v in r["by_subsystem"].items():
+            print(f"  {k:28s} {v['covered']:6d}/{v['lines']:<6d} {v['pct']:5.1f}%")
+        print("  most uncovered files:", ", ".join(f"{Path(x['file']).name}({x['uncovered']})" for x in r["most_uncovered_files"][:6]))
+        if args.json:
+            Path(args.json).write_text(json.dumps(r, indent=1))
+        return
 
     c = Coverage()
     if not c.profdata.exists():

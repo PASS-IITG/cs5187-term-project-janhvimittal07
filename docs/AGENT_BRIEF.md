@@ -121,6 +121,23 @@ tag: use it to check "is this already fixed?" before spending time.
   describe anything as a bug before that report lists it, and then only as a *candidate*.
 * Aim for at least 15 generators (all 14 new optimizers + the dependent-join rewrite + feature interactions) and 20 dossiers worked.
 
+## Phase C - coverage numbers for the paper (needs the coverage build; ask the human before starting the 1-hour build)
+The proposal promised "coverage improvements". Measure the coverage of the **lines added or changed since 1.5.6** (SQL-reachable code only)
+for each arm, on a build of the SAME release. A stale build gives silently wrong numbers: `cov.py` refuses to run on one.
+1. Build, with no other heavy job running: `rm -rf $FUZZ_WORK/build-cov && FUZZ_WORK=$FUZZ_WORK JOBS=3 bash src/build.sh cov` (about 1 hour).
+   `PY src/harness/preflight.py` must show `[PASS] cov`.
+2. One work directory per arm; scripts are replayed in a scratch directory, never in the DuckDB source tree:
+   | arm | what to replay | command |
+   |---|---|---|
+   | A1 generic | the 2.0 test corpus `corpus/seeds-v200` (plus mutants if you ran them) | `PY src/coverage/cov.py run-dir $FUZZ_WORK/corpus/seeds-v200 --workdir $FUZZ_WORK/results/cov-A1` |
+   | A3 LLM unguided | the output of `llm/generate.py --targets none --run unguided` | `... run-dir $FUZZ_WORK/corpus/llm/unguided --workdir $FUZZ_WORK/results/cov-A3` |
+   | A4 LLM directed | generators dumped with `gen_runner.py dump ... --n 300` (all of them into one directory) plus the reproducers from dossiers | `... run-dir $FUZZ_WORK/corpus/llm/agent --workdir $FUZZ_WORK/results/cov-A4` |
+   The hand-written targeted tools (A2) produce SQL in-process; their coverage is not measured unless you add a dump option.
+3. `PY src/coverage/cov.py changed --workdir $FUZZ_WORK/results/cov-A4 --json $FUZZ_WORK/results/cov-A4/changed.json` prints the
+   percentage of changed executable lines covered, per subsystem, and the files with the most uncovered lines (use that list as the
+   next generator targets: it is the real coverage-guided loop). Do the same for A1 and A3 and report all numbers side by side.
+Report in `FINAL_SUMMARY.md`: build id, number of scripts per arm, covered/total changed lines per arm. Do not round or drop an arm that looks bad.
+
 ## Known upstream bugs (never re-report)
 #27446, #27448, #27450, #27631, #27759, and the join/subquery INTERNAL errors in #27716-#27747. The report step also
 searches upstream, but always check yourself: new issues appear at ~30 per day.

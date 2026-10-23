@@ -107,6 +107,18 @@ def main() -> None:
     else:
         rec("FAIL", "driver", f"{drv} missing: make -C {CODE}/driver asan FUZZ_WORK={WORK}")
 
+    # coverage build (optional: only needed for the paper's "coverage of changed lines" number)
+    cov = WORK / "build-cov" / "duckdb"
+    if cov.exists():
+        q = subprocess.run([str(cov), "-no-agent", ":memory:", "-init", "/dev/null", "-csv", "-c", "select (select source_id from pragma_version())"],
+                           capture_output=True, text=True, timeout=60, env={**os.environ, "LLVM_PROFILE_FILE": "/dev/null"})
+        if want_id and want_id in q.stdout:
+            rec("PASS", "cov", f"{cov} is {a.tag}: coverage numbers are valid")
+        else:
+            rec("WARN", "cov", f"{cov} is NOT {a.tag} (stale build): coverage numbers would be wrong. Rebuild: rm -rf {WORK}/build-cov && FUZZ_WORK={WORK} JOBS=3 bash src/build.sh cov")
+    else:
+        rec("WARN", "cov", f"no coverage build: only needed for the paper's coverage number: FUZZ_WORK={WORK} JOBS=3 bash src/build.sh cov (about 1 hour)")
+
     # newer release
     if sh(["which", "gh"]).returncode == 0:
         p = sh(["gh", "release", "list", "--repo", "duckdb/duckdb", "--limit", "5", "--exclude-pre-releases"])
