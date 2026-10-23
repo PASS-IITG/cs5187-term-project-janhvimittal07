@@ -204,7 +204,8 @@ def run_seed(path: Path, secs: float = 20.0,
                                             "differs": ["norec_mismatch"],
                                             "detail": {"opt": r_opt[1], "ref": r_ref[1], "predicate": pred, "agg": agg_desc}
                                         })
-                                elif r_opt[0] != r_ref[0]:
+                                elif r_opt[0] != r_ref[0] and "expression depth" not in str(r_opt[1:]) + str(r_ref[1:]):
+                                    # (a seed may lower max_expression_depth; the CASE-wrapped reference query is deeper)
                                     found.append({
                                         "kind": "norec",
                                         "idx": len(stmts),
