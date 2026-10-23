@@ -1,4 +1,4 @@
-<!-- DRAFT - NOT FILED (to be filed by Prabhnoor). -->
+<!-- FILED 2026-10-23 by Prabhnoor: https://github.com/duckdb/duckdb/issues/27759 -->
 
 **Title:** INTERNAL Error "Conflicting or cyclic column binding replacement" when a `FOR EACH ROW` trigger inserts into a table that has a `BEFORE INSERT` trigger (`delim_join_as_cte`)
 
