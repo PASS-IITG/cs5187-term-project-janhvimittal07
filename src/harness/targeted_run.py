@@ -252,6 +252,13 @@ class Run:
     def report(self) -> None:
         import verify_finding
         self.log("report", 0, 0, "collecting candidates")
+        for extra in ("asan-agent", "asan-agent2"):                 # SQL written by the AI agent itself (docs/AGENT_BRIEF.md, phase B)
+            h = OUT / extra / "hits.jsonl"
+            if h.exists():
+                shutil.copy(h, OUT / "hits" / f"{extra.replace('-', '_')}__hits.jsonl")
+        sw = OUT / "sweep-agent.jsonl"
+        if sw.exists():
+            shutil.copy(sw, OUT / "hits" / "sweep_agent__sweep-agent.jsonl")
         cands = self.candidates()
         auto = [c for c in cands if not c["review"]]
         review = [c for c in cands if c["review"]]
@@ -346,13 +353,17 @@ def main() -> None:
     ap.add_argument("--seed-base", type=int, default=100)
     ap.add_argument("--reserve-min", type=float, default=25.0, help="minutes kept for triage and the report")
     ap.add_argument("--max-verify", type=int, default=60)
+    ap.add_argument("--report-only", action="store_true", help="skip all runs; verify the hits collected so far and write RUN_REPORT.md")
     a = ap.parse_args()
     if a.smoke:
         a.hours = max(a.hours, 0.5) if a.hours != 12.0 else 0.5
         a.reserve_min = 8
     r = Run(a)
     r.preflight()
-    r.run_all()
+    if a.report_only:
+        r.report()
+    else:
+        r.run_all()
 
 
 if __name__ == "__main__":
