@@ -1,4 +1,4 @@
-<!-- DRAFT - NOT FILED. Review, then file on github.com/duckdb/duckdb only with the team's OK. -->
+<!-- DRAFT - NOT FILED (to be filed by Prabhnoor). -->
 
 **Title:** INTERNAL Error "Conflicting or cyclic column binding replacement" when a `FOR EACH ROW` trigger inserts into a table that has a `BEFORE INSERT` trigger (`delim_join_as_cte`)
 
@@ -51,5 +51,7 @@ INTERNAL Error: Conflicting or cyclic column binding replacement for #[54.0]
 ### Environment
 
 * DuckDB v2.0.0 `d54cbbe3df` (also 2.0.1.dev2610211350 `d9c3e9ae11`), Linux x86_64, Python 3.14 wheel / CLI.
+
+Related but different: #27631 (two MERGE trigger bodies, "Failed to bind column reference", goes away with `projection_pullup` disabled). This one fails with every optimizer disabled and only with `delim_join_as_cte = true`.
 
 Found by fuzzing the new trigger feature (random trigger definitions + DML sequences), reduced by hand.
