@@ -103,13 +103,16 @@ def run_sql(sql: str, build: str = "asan", timeout: float = 30.0,
     if not exe.exists():
         raise FileNotFoundError(f"{exe} not built yet")
     env = dict(os.environ)
+    # the DuckDB shell switches to a JSON "agent mode" when these are set, which hides "INTERNAL Error" from classify()
+    for var in ("AI_AGENT", "CLAUDECODE", "CLAUDE_CODE", "CURSOR_AGENT"):
+        env.pop(var, None)
     env.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0:symbolize=1")
     env.setdefault("UBSAN_OPTIONS", "print_stacktrace=1:halt_on_error=1")
     env.update(env_extra or {})
     # NOTE: feed SQL on stdin, not -f: the shell aborts a -f script at its first
     # error but keeps going on stdin, which is what a fuzzing batch needs.
     try:
-        p = subprocess.run([str(exe), db or ":memory:", "-init", "/dev/null"], input=sql,
+        p = subprocess.run([str(exe), "-no-agent", db or ":memory:", "-init", "/dev/null"], input=sql,
                            capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd,
                            errors="replace")
         return classify(p.returncode, p.stdout, p.stderr)

@@ -28,6 +28,8 @@ sys.path.insert(0, str(HERE))
 import runner  # noqa: E402
 
 INTERESTING = ("internal_error", "asan", "crash")
+# mined reproducers sometimes contain pasted error text; a parser error then echoes it and classify() sees "INTERNAL Error"
+ECHO = re.compile(r"INTERNAL Error|Assertion failed|Assertion `|Assertion triggered|AddressSanitizer|runtime error:")
 RESOURCE = re.compile(r"hard rss limit|rss limit exhausted|out-of-memory|requested allocation size|allocator is out of memory|"
                       r"allocation-size-too-big|exceeds maximum supported size|failed to allocate|cannot allocate memory|"
                       r"Out of Memory Error|\bKilled\b", re.I)
@@ -58,7 +60,20 @@ def main() -> None:
     ap.add_argument("--timeout", type=float, default=10.0)
     ap.add_argument("--limit", type=int, default=0, help="stop after N queries (0 = all)")
     ap.add_argument("--fresh", action="store_true", help="ignore progress.json")
+    ap.add_argument("--reconfirm", action="store_true", help="re-run confirm() on every hit in --out/hits.jsonl and rewrite the verdicts")
     a = ap.parse_args()
+
+    if a.reconfirm:
+        hp = Path(a.out) / "hits.jsonl"
+        recs = [json.loads(l) for l in hp.open()]
+        for rec in recs:
+            if rec["outcome"] == "internal_error" and ECHO.search(rec["sql"]):
+                rec["verdict"] = "echo artifact"
+            elif not rec["verdict"].startswith("resource"):
+                rec["verdict"] = confirm(rec["sql"])
+            print(f"{rec['outcome']:14s} {rec['verdict']:30s} {rec['id']}", flush=True)
+        hp.write_text("".join(json.dumps(r) + "\n" for r in recs))
+        return
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -96,6 +111,9 @@ def main() -> None:
                 continue
             seen.add(sig)
             text = r.stderr + r.stdout
+            if r.outcome == "internal_error" and ECHO.search(sql):
+                counts["echo-artifact"] += 1
+                continue                                          # the script itself contains the error text
             verdict = "resource artifact" if is_resource(r) else confirm(sql)
             rec = {"id": qid, "outcome": r.outcome, "signature": sig, "verdict": verdict, "sql": sql[-1500:],
                    "evidence": " | ".join(r.errors[:2]) or text[:400]}
