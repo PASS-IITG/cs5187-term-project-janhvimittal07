@@ -72,37 +72,52 @@ What you did NOT do (anything skipped)
 ```
 If there are no verified findings, say: "No verified new findings." and stop. Do not pad the report.
 
-## Phase B - you are also the generator (this is where an LLM adds value; do it while the scripts run)
-The scripts fuzz mechanically. You can do what they cannot: **read the new C++ and write SQL aimed at it.** Start Phase B
-right after step 3 starts the run (writing SQL is light; the replays obey rule 5: one heavy job at a time).
+## Phase B - you are the fuzzer's brain: write GENERATORS, not queries (this is the core of the project)
+The scripts fuzz mechanically. What they cannot do is read the new C++ and decide what to attack. You can. But **do not write
+SQL by hand**: one hand-written query is one test case. Write small *generator programs*: one program yields thousands of
+test cases, and a generator like that (`fuzz_triggers.py`, hand-written for one new feature) is what found duckdb/duckdb#27759.
+The engine, not you, judges every generator (`harness/gen_runner.py`); nothing you say about your own work is trusted.
 
-What to read (everything is on disk; no need to paste code anywhere):
-| Input | Where | Use |
-|---|---|---|
-| Where the new code is | `$FUZZ_WORK/results/hints-v200-new.json` (27k branches/constants inside C++ changed since 1.5.6). Make it with `PY src/static/new_code_hints.py ...` if missing (runbook section 2). Rank files: `python3 -c "import json,collections;h=json.load(open('$FUZZ_WORK/results/hints-v200-new.json'));[print(n,f) for f,n in collections.Counter(x['file'] for x in h).most_common(40)]"` | pick the top ~25 files, read them in `$FUZZ_WORK/duckdb/<file>` |
-| Valid 2.0 syntax | `$FUZZ_WORK/results/feature-cards.json` (make with `PY src/llm/feature_cards.py build`) and `$FUZZ_WORK/corpus/seeds-v200-added/*.sql` (the tests added in 2.0) | copy the syntax exactly; never guess syntax of new features |
-| New features to target | triggers (`CREATE TRIGGER`, `REFERENCING`, FOR EACH ROW/STATEMENT, MERGE/RETURNING inside bodies), the delim-join-to-CTE rewrite (setting `delim_join_as_cte`; every correlated subquery), the 14 new optimizers (`SELECT name FROM duckdb_optimizers()` minus the 1.5.6 list), `variant_*` / `json_*` functions, aggregate state export, the `tuple` and `timestamptz_ns` types, `NEAREST`/similarity joins, `DEFAULT` binding in INSERT/UPDATE/MERGE, ordered aggregates and quantiles, new settings (`approximate_join_order_threshold`, `regex_match_operator_semantics`, `error_on_division_by_zero`) | combine them with each other (trigger + MERGE + RETURNING, correlated subquery inside window frame inside CTE, ...) |
-| Bugs already known | the list at the end of this file; also `gh issue list --repo duckdb/duckdb --limit 100 --json number,title` for your target area before you spend time on it | avoid duplicates |
-| Coverage | **not available in this run** (the coverage build is for 1.5.6; rebuilding takes hours). The changed-code hints replace it. | - |
+**The loop (per target; 3-4 iterations, then scale up):**
+1. *Choose a target* - something that is new in 2.0 and has a switch you can flip: one of the new optimizers
+   (`PY -c "import sys;sys.path.insert(0,'src/harness');import oracle;print(oracle.NEW_OPTIMIZERS)"` with `FUZZ_WORK` set), or the setting
+   `delim_join_as_cte`; features without a switch (triggers, `variant_*`/`json_*` functions, aggregate-state export, `tuple`,
+   `NEAREST` joins, `DEFAULT` binding in INSERT/UPDATE/MERGE) are fine too, then only validity and plan variety are measured.
+   Pairs of features are the best targets (the one real bug so far was an interaction: row trigger x BEFORE trigger x delim-join CTE).
+2. *Read the code, on demand* (do not load everything): `$FUZZ_WORK/duckdb/<file>`, starting with the files that have the most
+   changed code (`results/hints-v200-new.json`, see the runbook for how to make it), and the matching feature card in
+   `results/feature-cards.json` and tests in `corpus/seeds-v200-added/` for the exact syntax. Note the branches, limits and special cases.
+3. *Write the generator* into `$FUZZ_WORK/generators/<name>.py` (never into the repo). Start from the template
+   `src/gen/llm_generators/delim_cte_subqueries.py` and keep its contract: `META` (with `"author_model"` set to the name of the
+   model that wrote it) and a pure `generate(rng)` that returns `{"setup": [...], "queries": [...]}`. Only `random`, `itertools`,
+   `string`, `math`, `textwrap`, `functools`, `collections` may be imported; no files, no network, no extensions; the checker rejects the rest.
+4. *Run the judge:* `PY src/harness/gen_runner.py check $FUZZ_WORK/generators/<name>.py` (30 cases, about a minute). It prints
+   engine-measured feedback: valid-query rate, **reach rate** (does the query plan change when the target switch is flipped, i.e. does the
+   query really exercise the target code), distinct plan shapes, the most common SQL errors, and examples that did / did not reach.
+5. *Repair using that feedback only.* Fix the SQL errors it lists, copy the shapes that reach, change what the missing ones lack, add
+   NULLs / empty tables / duplicates / 2048-row tables / deeper nesting. Repeat steps 4-5 until valid rate >= 85% and (if there is a switch)
+   reach rate >= 50%, or after 4 rounds, whichever comes first. Do not game the numbers: trivial queries that are always valid but never
+   reach the target are useless, and the report will show they found nothing.
+6. *Scale:* `PY src/harness/gen_runner.py run $FUZZ_WORK/generators/<name>.py --n 3000 --seed S` for several seeds `S`. Every case runs under
+   five configurations on fresh connections (default, `delim_join_as_cte=false`, the target switch off, `threads=1`, `enable_verification`); it
+   flags INTERNAL errors, crashes and results that differ between configurations. Hits land in `results/targeted/gens/<name>/hits.jsonl`.
+7. Run the replay on the ASan build for the best generators (one heavy job at a time): see the `asan_replay.py --sql-dir` option, fed with
+   a few hundred cases written out by the generator, or simply let `targeted_run.py --report-only` verify the hits.
 
-What counts as a finding: an `INTERNAL`/`FATAL` error, a crash, a sanitizer report, or **two configurations disagreeing on
-the result** (`delim_join_as_cte`, `disabled_optimizers`, `threads`, `approximate_join_order_threshold=2`,
-`PRAGMA enable_verification`). Ordinary errors, odd-looking SQL and "I think this should work" are not findings.
+**Second track - fix dossiers (variant hunting).** Run `PY src/harness/fix_dossiers.py --refs origin/main --limit 80`. Each file in
+`results/targeted/dossiers/` is a bug that upstream FIXED after 2.0.0 (so it exists in 2.0.0 and is known; never report it) with the
+fix diff and the reproducer from its test. Your job: say what mistake the old code made, search the source for other sites making the
+same mistake, and write a generator or reproducer for each site. Run `harness/verify_finding.py <file> --dev-site $FUZZ_WORK/dev-snapshot`
+(`pip install --pre --no-deps --target $FUZZ_WORK/dev-snapshot duckdb` first): **fails on 2.0.0 AND on the newer snapshot = sibling /
+incomplete-fix candidate**; fails only on 2.0.0 = just the original bug. `results/targeted/known_fixed.json` lists every fix commit since the
+tag: use it to check "is this already fixed?" before spending time.
 
-Procedure, per target (aim for at least 25 targets, 20-40 scripts each):
-1. Read the C++ around the hints; note the branches, limits and special cases (empty input, NULLs, duplicates, 2048-row
-   vector boundaries, huge/negative values, nesting depth, combinations with another new feature).
-2. Write self-contained scripts to `$FUZZ_WORK/corpus/llm/agent/<feature>__NN.sql` (create the tables inside each script;
-   at most 60 statements; **no** `COPY`, `ATTACH`, `INSTALL`, `LOAD`, `read_*()`, file paths, URLs or extensions).
-3. Check them on the wheel (`PY` with `duckdb`); delete any script whose first three statements fail (invented syntax).
-4. Replay: when `pgrep -f asan_replay` shows nothing running, from the scratch directory run
-   `PY <repo>/src/harness/asan_replay.py --sql-dir $FUZZ_WORK/corpus/llm/agent --out $FUZZ_WORK/results/targeted/asan-agent`
-   and `PY <repo>/src/harness/sweep_oracle.py --seeds $FUZZ_WORK/corpus/llm/agent --out $FUZZ_WORK/results/targeted/sweep-agent.jsonl --workers 2`
-   (the second compares configurations). For a second batch use `--out .../asan-agent2`.
-5. After the last replay run `PY <repo>/src/harness/targeted_run.py --report-only`; your hits are verified and searched
-   upstream like the scripts' hits and appear in `RUN_REPORT.md`.
-Keep `results/targeted/AGENT_NOTES.md` up to date (targets done, scripts written/kept, replay runs, ideas left) so you can
-resume after losing context. Report in `FINAL_SUMMARY.md` how many scripts you wrote and kept, per feature.
+**Rules specific to this phase**
+* Only engine-measured numbers count. Never write "this generator reaches the optimizer" - show the `metrics.json`.
+* Record in `AGENT_NOTES.md`, per generator: target, iterations, valid/reach rate per iteration, model used, hits. Negative results too.
+* Real findings go through `PY src/harness/targeted_run.py --report-only` (verifies alone on every build, searches upstream). Do not
+  describe anything as a bug before that report lists it, and then only as a *candidate*.
+* Aim for at least 15 generators (all 14 new optimizers + the dependent-join rewrite + feature interactions) and 20 dossiers worked.
 
 ## Known upstream bugs (never re-report)
 #27446, #27448, #27450, #27631, #27759, and the join/subquery INTERNAL errors in #27716-#27747. The report step also
