@@ -7,6 +7,12 @@ new issues a day from people running the same kind of fuzzing, mostly on joins, 
 (duckdb/duckdb#27759) came from aiming at a **new 2.0 feature nobody covers** (triggers) with a **purpose-built generator
 and oracle**. So: target new code, use oracles, verify everything.
 
+## Fast path (recommended, and what an AI agent should use)
+After the one-time setup in section 1, the whole run below is one command, time-boxed and resumable:
+`python src/harness/targeted_run.py --smoke --fresh` (5-minute self-test), then `python src/harness/targeted_run.py --hours 12`.
+It runs every phase, verifies every hit alone on all builds/settings, searches upstream, and writes
+`results/targeted/RUN_REPORT.md`. The agent instructions are in `docs/AGENT_BRIEF.md`. Sections 2-5 below explain what it does.
+
 ## 0. Rules (these decide whether a result counts)
 1. **Version gate.** Everything runs on the released **v2.0.0** (`source_id d54cbbe3df`). `python src/harness/preflight.py`
    must print `preflight ok` before every run. A run on another build proves nothing about 2.0.0.
