@@ -31,7 +31,7 @@ sys.path.insert(0, str(SRC / "coverage"))
 import runner  # noqa: E402
 from client import LLM, LLMError  # noqa: E402
 from cov import Coverage  # noqa: E402
-from generate import _fmt_target, generate_batch, load_schemas  # noqa: E402
+from generate import _fmt_target, configure, generate_batch, load_schemas  # noqa: E402
 
 WORK = runner.WORK
 FILTERS = ["src/optimizer", "src/planner", "src/execution", "src/function", "src/storage"]
@@ -75,6 +75,10 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--timeout", type=float, default=60)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--hints", default="", help="hints JSON used to rank uncovered regions (e.g. results/hints-v200-new.json)")
+    ap.add_argument("--cards", default="", help="feature-cards JSON: valid 2.0 example scripts appended to each target")
+    ap.add_argument("--examples-per-target", type=int, default=2)
+    ap.add_argument("--seed-dir", default="", help="warm-start seed directory (default corpus/seeds; use corpus/seeds-v200-added)")
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
@@ -83,6 +87,10 @@ def main() -> None:
         sys.exit(f"no schemas in {a.schemas}; run: python gen/generate_schema.py --out-dir {a.schemas}")
     names = sorted(schemas)
     llm = LLM()
+    configure(a.cards, "", a.examples_per_target)
+    if a.hints:
+        import cov as covmod
+        covmod.DEFAULT_HINTS = Path(a.hints)
     cov = Coverage(WORK / "results" / f"cov-loop-{a.run}")
     out_dir = WORK / "corpus" / "llm" / a.run
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +98,7 @@ def main() -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
 
     # warm start: run some seeds so there is a coverage profile to diff against
-    seeds = sorted((WORK / "corpus" / "seeds").glob("*.sql"))
+    seeds = sorted((Path(a.seed_dir) if a.seed_dir else WORK / "corpus" / "seeds").glob("*.sql"))
     rng.shuffle(seeds)
     for s in seeds[:a.warm_seeds]:
         cov.run_and_merge(s.read_text(errors="replace"), a.timeout)

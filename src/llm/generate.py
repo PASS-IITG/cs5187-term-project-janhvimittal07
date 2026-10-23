@@ -62,9 +62,32 @@ def load_schemas(path: Path) -> dict[str, str]:
     return {f.stem: f.read_text() for f in sorted(path.glob("*.sql"))}
 
 
+# optional: focus on code that is new in 2.0 (see static/new_code_hints.py, llm/feature_cards.py)
+CARDS: list[dict] | None = None
+EXAMPLES_K = 2
+HINTS_PATH: Path | None = None
+_card_rng = random.Random(1)
+
+
+def configure(cards: str = "", hints: str = "", examples: int = 2) -> None:
+    """Enable feature cards (valid 2.0 example scripts appended to each target) and/or a different hints file."""
+    global CARDS, HINTS_PATH, EXAMPLES_K
+    if cards:
+        import feature_cards
+        CARDS = feature_cards.load_cards(cards)
+    if hints:
+        HINTS_PATH = Path(hints)
+    EXAMPLES_K = examples
+
+
 def _fmt_target(file: str, start: int, end: int, snippet: str) -> str:
-    return (f"\nThis C++ code in DuckDB ({file}, lines {start}-{end}) has never been executed. "
+    text = (f"\nThis C++ code in DuckDB ({file}, lines {start}-{end}) has never been executed. "
             f"Your queries should reach it:\n\n```cpp\n{snippet[:2500]}\n```\n")
+    if CARDS:
+        import feature_cards
+        _, extra = feature_cards.examples_for(CARDS, file, EXAMPLES_K, _card_rng)
+        text += extra
+    return text
 
 
 def pick_targets(n: int, source: str, rng: random.Random, filters: list[str] | None = None) -> list[dict]:
@@ -83,7 +106,7 @@ def pick_targets(n: int, source: str, rng: random.Random, filters: list[str] | N
         except Exception as e:                    # noqa: BLE001
             print(f"[warn] coverage targets unavailable: {e!r}", file=sys.stderr)
     if len(out) < n and source in ("auto", "hints"):
-        hp = SRC / "static" / "hints.json"
+        hp = HINTS_PATH or SRC / "static" / "hints.json"
         if hp.exists():
             hs = [h for h in json.loads(hp.read_text()) if h.get("kind") in ("sink", "branch") and h.get("context")]
             rng.shuffle(hs)
@@ -160,12 +183,16 @@ def main() -> None:
     ap.add_argument("--targets", default="auto", choices=["auto", "cov", "hints", "none"])
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--hints", default="", help="hints JSON (e.g. results/hints-v200-new.json: code changed since 1.5.6)")
+    ap.add_argument("--cards", default="", help="feature-cards JSON (llm/feature_cards.py build): valid 2.0 examples per target")
+    ap.add_argument("--examples-per-target", type=int, default=2)
     a = ap.parse_args()
 
     schemas = load_schemas(Path(a.schemas))
     if not schemas:
         sys.exit(f"no .sql schemas in {a.schemas}; run: python gen/generate_schema.py --out-dir {a.schemas}")
     rng = random.Random(a.seed)
+    configure(a.cards, a.hints, a.examples_per_target)
     llm = LLM()
     out_dir = WORK / "corpus" / "llm" / a.run
     out_dir.mkdir(parents=True, exist_ok=True)
