@@ -565,6 +565,8 @@ def main() -> None:
     p_unc = sub.add_parser("uncovered", help="Rank uncovered regions")
     p_unc.add_argument("--by", choices=["size", "hints", "sinks"], default="hints", help="Ranking mode")
     p_unc.add_argument("--top", type=int, default=15, help="Number of regions to display")
+    p_unc.add_argument("--workdir", default="", help="coverage work dir (default results/cov)")
+    p_unc.add_argument("--hints", default="", help="hints JSON for the ranking, e.g. results/hints-v200-new.json (hints inside code changed since 1.5.6); the default hints.json is from 1.5.6 and its line numbers do not match 2.0.0")
     p_unc.add_argument("filters", nargs="*", default=DEFAULT_FILTERS, help="Subsystem path filters")
 
     # hints
@@ -657,7 +659,7 @@ def main() -> None:
             Path(args.json).write_text(json.dumps(r, indent=1))
         return
 
-    c = Coverage()
+    c = Coverage(getattr(args, "workdir", "") or WORK / "results" / "cov")
     if not c.profdata.exists():
         print(f"Error: {c.profdata} does not exist. Run baseline fuzzing first.", file=sys.stderr)
         sys.exit(1)
@@ -683,7 +685,7 @@ def main() -> None:
             print(f"{p:5.1f}%  {h:5d}/{n:<5d} {f}")
 
     elif cmd == "uncovered":
-        regions = c.uncovered_regions(flt, top=args.top, by=args.by)
+        regions = c.uncovered_regions(flt, top=args.top, by=args.by, hints_path=args.hints or None)
         print(f"=== Top {len(regions)} Uncovered Regions (ranked by {args.by}) ===")
         for i, r in enumerate(regions, 1):
             print(f"[{i}] {r.file}:L{r.start}-L{r.end} (size: {r.size}, hints: {r.hints_count}, sinks: {r.sinks_count})")
