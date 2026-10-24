@@ -306,6 +306,8 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
     out_dir.mkdir(parents=True, exist_ok=True)
 
     nq = nvalid = nreach = ncomparable = 0
+    templates: set[str] = set()
+    per_case: Counter = Counter()
     sigs: Counter = Counter()
     errs: Counter = Counter()
     hits: list[dict] = []
@@ -315,9 +317,11 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
             errs["(setup failed)"] += 1
             continue
         case = by_seed[r["case"]]
+        per_case[len(case["queries"])] += 1
         for info in r["queries"]:
             nq += 1
             sql = case["queries"][info["i"]]["sql"]
+            templates.add(re.sub(r"\s+", " ", re.sub(r"\b\d+(\.\d+)?\b", "N", re.sub(r"'[^']*'", "S", sql.lower()))))
             if info["status"] == "ok":
                 nvalid += 1
                 if info["sig"]:
@@ -348,7 +352,22 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
     for h in hits:
         uniq.setdefault((h["kind"], h["config"], re.sub(r"\d+", "N", h["detail"])[:80]), h)
     (out_dir / "hits.jsonl").write_text("".join(json.dumps(h) + "\n" for h in uniq.values()))
+    shapes = len(sigs)
+    flags = []
+    need_t = max(30, int(0.05 * nq))
+    need_s = max(15, int(0.02 * nvalid))
+    if len(templates) < need_t:
+        flags.append(f"only {len(templates)} distinct query templates (literals stripped) for {nq} queries (need >= {need_t})")
+    if sw and nvalid >= 100 and shapes < need_s:
+        flags.append(f"only {shapes} distinct plan shapes for {nvalid} valid queries (need >= {need_s})")
+    if len(per_case) == 1 and nq >= 200:
+        flags.append(f"every case has exactly {next(iter(per_case))} queries (no structural randomness)")
+    if nq and nvalid == nq and len(templates) < max(60, int(0.1 * nq)):
+        flags.append("100% valid with few templates: queries are trivially valid")
+    quality = "LOW DIVERSITY - NOT A REAL TEST" if flags else "ok"
     metrics = {
+        "quality": quality, "quality_flags": flags, "distinct_templates": len(templates),
+        "queries_per_case": dict(sorted(per_case.items())),
         "generator": str(path), "name": name, "target": target, "n_cases": n, "generator_errors": dict(gen_errors),
         "cases_run": len(results), "setup_ok": sum(1 for r in results if r.get("valid_setup")),
         "queries": nq, "valid_queries": nvalid, "valid_rate": round(nvalid / nq, 3) if nq else 0,
@@ -368,6 +387,8 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
 def feedback_text(m: dict) -> str:
     """What the next LLM round gets: measured by the engine, never by the model."""
     L = [f"# Feedback for generator `{m['name']}` (engine-measured, seed {m['seed']}, DuckDB {m['devcheck']})", "",
+         f"**Quality: {m['quality']}**" + ("".join(f"\n* {f}" for f in m["quality_flags"]) if m["quality_flags"] else ""),
+         f"* distinct query templates: {m['distinct_templates']}; queries per case: {m['queries_per_case']}", ""
          f"* cases generated {m['n_cases']}, ran {m['cases_run']}, setup valid {m['setup_ok']}",
          f"* queries {m['queries']}, valid {m['valid_queries']} (**valid rate {m['valid_rate']:.1%}**)"]
     if m["has_switch"]:

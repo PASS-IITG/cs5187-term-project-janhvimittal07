@@ -95,8 +95,11 @@ The engine, not you, judges every generator (`harness/gen_runner.py`); nothing y
    engine-measured feedback: valid-query rate, **reach rate** (does the query plan change when the target switch is flipped, i.e. does the
    query really exercise the target code), distinct plan shapes, the most common SQL errors, and examples that did / did not reach.
 5. *Repair using that feedback only.* Fix the SQL errors it lists, copy the shapes that reach, change what the missing ones lack, add
-   NULLs / empty tables / duplicates / 2048-row tables / deeper nesting. Repeat steps 4-5 until valid rate >= 85% and (if there is a switch)
-   reach rate >= 50%, or after 4 rounds, whichever comes first. Do not game the numbers: trivial queries that are always valid but never
+   NULLs / empty tables / duplicates / 2048-row tables / deeper nesting. Repeat steps 4-5 until the verdict is `Quality: ok` AND valid rate >= 85% AND (if there is a switch)
+   reach rate >= 50%, or after 4 rounds, whichever comes first. **`Quality: LOW DIVERSITY` means the generator emits the same few templates with
+   different constants (e.g. exactly 8 queries per case, 100% valid, a dozen plan shapes): it is not a test, it does not count, and the report lists it
+   as such. A good generator makes random STRUCTURAL choices (which clause, which join type, nesting depth, how many subqueries, which functions) and
+   gets a few percent invalid queries.** The pilot `delim_cte_subqueries.py` is the bar: ~200 templates per 30 cases, hundreds of plan shapes. Do not game the numbers: trivial queries that are always valid but never
    reach the target are useless, and the report will show they found nothing.
 6. *Scale:* `PY src/harness/gen_runner.py run $FUZZ_WORK/generators/<name>.py --n 3000 --seed S` for several seeds `S`. Every case runs under
    five configurations on fresh connections (default, `delim_join_as_cte=false`, the target switch off, `threads=1`, `enable_verification`); it

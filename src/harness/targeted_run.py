@@ -336,6 +336,26 @@ class Run:
                 L.append(f"* {c['tool']} {c['id']} [{c['kind']}] {c['detail'][:140]}")
             L.append("")
         table("Artifacts (did not reproduce alone)", artifact)
+        gens = []
+        for mf in sorted((OUT / "gens").glob("*/metrics.json")) if (OUT / "gens").exists() else []:
+            if mf.parent.name.startswith("_"):
+                continue
+            try:
+                gens.append(json.loads(mf.read_text()))
+            except ValueError:
+                pass
+        if gens:
+            L += ["## LLM-written generators (numbers come from the engine's metrics.json, not from the agent)", "",
+                  "| generator | cases | queries | valid | reach | plan shapes | templates | quality | hits |", "|---|---|---|---|---|---|---|---|---|"]
+            for g in gens:
+                reach = "n/a" if g.get("reach_rate") is None else f"{g['reach_rate']:.0%}"
+                L.append(f"| {g['name']} | {g['cases_run']} | {g['queries']} | {g['valid_rate']:.0%} | {reach} | {g['distinct_plan_signatures']} | "
+                         f"{g.get('distinct_templates', '?')} | {g.get('quality', '?')} | {g['hits_unique']} |")
+            bad = [g["name"] for g in gens if g.get("quality", "ok") != "ok"]
+            if bad:
+                L += ["", f"**{len(bad)} of {len(gens)} generators are LOW DIVERSITY and do not count as tested coverage: {', '.join(bad)}.** "
+                          "Their valid/reach rates are not evidence of anything."]
+            L.append("")
         L += ["## Honesty notes", "",
               "* Nothing here was filed or pushed. Every 'candidate' still needs a human to read the SQL and search upstream.",
               "* Counts are real counts from this run; do not round up in the paper.", ""]
