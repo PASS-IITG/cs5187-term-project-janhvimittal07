@@ -9,6 +9,9 @@
    "create trigger",
    "for each row",
    "before insert"
+  ],
+  "depends_on": [
+   "delim_join_as_cte"
   ]
  },
  {

@@ -258,10 +258,28 @@ class Run:
                 gens.append((mf, json.loads(mf.read_text())))
             except ValueError:
                 pass
-        good = [g for _, g in gens if g.get("quality") == "ok" and g.get("cases_run", 0) >= 3000 and g.get("author_model")]
-        chk(len(good) >= self.a.min_generators,
-            f"generators: {len(good)} of {len(gens)} are quality-ok, >= 3000 cases and have author_model (need {self.a.min_generators}); "
-            f"not counted: {[g['name'] + ':' + ('low-diversity' if g.get('quality') != 'ok' else 'cases=' + str(g.get('cases_run')) if g.get('cases_run', 0) < 3000 else 'no author_model') for _, g in gens if g not in good][:8]}")
+        import hashlib, gen_runner
+        good, why = [], []
+        for _, g in gens:
+            reasons = []
+            flags, _w = gen_runner.quality_verdict(nq=g.get("queries", 0), nvalid=g.get("valid_queries", 0), templates=g.get("distinct_templates", 0),
+                                                   shapes=g.get("distinct_plan_signatures", 0), cases=g.get("cases_run", 0), reach_rate=g.get("reach_rate"),
+                                                   comparable_rate=g.get("comparable_rate", 0.0), has_switch=bool(g.get("has_switch")), target=g.get("target"))
+            if flags:
+                reasons.append("quality recomputed from counts: " + flags[0][:60])
+            if g.get("cases_run", 0) < 3000:
+                reasons.append(f"cases={g.get('cases_run')}")
+            if not g.get("author_model"):
+                reasons.append("no author_model")
+            gp = Path(g.get("generator", ""))
+            if not (gp.exists() and g.get("generator_sha256") == hashlib.sha256(gp.read_text().encode()).hexdigest()):
+                reasons.append("generator file missing or changed since the metrics were written")
+            (why if reasons else good).append((g, reasons))
+        gl = [g for g, _ in good]
+        distinct_hash, distinct_target = len({g["generator_sha256"] for g in gl}), len({g.get("target_key") for g in gl})
+        chk(len(gl) >= self.a.min_generators and distinct_hash == len(gl) and distinct_target >= 6,
+            f"generators: {len(gl)} valid of {len(gens)} (need {self.a.min_generators}); distinct generator files {distinct_hash}; distinct targets {distinct_target} (need >= 6); "
+            f"rejected: {[g['name'] + ' (' + '; '.join(r) + ')' for g, r in why][:6]}")
         rep = OUT / "RUN_REPORT.md"
         newest = max([mf.stat().st_mtime for mf, _ in gens] + [0])
         chk(rep.exists() and rep.stat().st_mtime >= newest,
@@ -269,12 +287,13 @@ class Run:
         notes = " ".join((OUT / f).read_text(errors="replace") for f in ("AGENT_NOTES.md", "FINAL_SUMMARY.md") if (OUT / f).exists())
         chk((OUT / "FINAL_SUMMARY.md").exists() and (OUT / "AGENT_NOTES.md").exists(), "FINAL_SUMMARY.md and AGENT_NOTES.md exist")
         dossiers = [f.stem for f in (OUT / "dossiers").glob("*.md")] if (OUT / "dossiers").exists() else []
-        worked = [d for d in dossiers if d in notes]
+        worked = [d for d in dossiers if re.search(re.escape(d) + r".{0,300}?(sibling|no sibling|already fixed|not vulnerable|negative|checked|result|verdict|reproduce)", notes, re.S | re.I)]
         chk(len(worked) >= self.a.min_dossiers, f"fix dossiers worked: {len(worked)} named in the notes (need {self.a.min_dossiers}; {len(dossiers)} exist)")
         covs = {f.parent.name: json.loads(f.read_text()) for f in (WORK / "results").glob("cov-A*/changed.json")}
         ids = {v.get("build_source_id") for v in covs.values()}
-        chk("cov-A1" in covs and "cov-A4" in covs and len(ids) == 1 and None not in ids,
-            f"coverage: arms found {sorted(covs)}; both A1 (baseline) and A4 are required, from one build ({ids})")
+        same = "cov-A1" in covs and "cov-A4" in covs and (covs["cov-A1"].get("covered"), covs["cov-A1"].get("by_subsystem")) == (covs["cov-A4"].get("covered"), covs["cov-A4"].get("by_subsystem"))
+        chk("cov-A1" in covs and "cov-A4" in covs and len(ids) == 1 and None not in ids and not same,
+            f"coverage: arms found {sorted(covs)}; both A1 (baseline) and A4 are required, from one build ({ids}), and they must not be identical ({'IDENTICAL' if same else 'differ'})")
         text = rep.read_text() if rep.exists() else ""
         cands = re.findall(r"cand\d{3}", text)
         missing = sorted({c for c in cands if c not in notes})

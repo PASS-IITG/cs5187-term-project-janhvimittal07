@@ -103,11 +103,11 @@ The engine, not you, judges every generator (`harness/gen_runner.py`); nothing y
    model that wrote it) and a pure `generate(rng)` that returns `{"setup": [...], "queries": [...]}`. Only `random`, `itertools`,
    `string`, `math`, `textwrap`, `functools`, `collections` may be imported; no files, no network, no extensions; the checker rejects the rest.
 4. *Run the judge:* `PY src/harness/gen_runner.py check $FUZZ_WORK/generators/<name>.py` (30 cases, about a minute). It prints
-   engine-measured feedback: valid-query rate, **reach rate** (does the query plan change when the target switch is flipped, i.e. does the
-   query really exercise the target code), distinct plan shapes, the most common SQL errors, and examples that did / did not reach.
+   engine-measured feedback: valid-query rate, **reach rate** (do the plan's operators or their expressions change when the target switch is flipped, i.e. does the
+   query really exercise the target code), distinct physical-plan operator trees (read from `EXPLAIN (FORMAT JSON)`), the most common SQL errors, and examples that did / did not reach.
 5. *Repair using that feedback only.* Fix the SQL errors it lists, copy the shapes that reach, change what the missing ones lack, add
    NULLs / empty tables / duplicates / 2048-row tables / deeper nesting. Repeat steps 4-5 until the verdict is `Quality: ok` AND valid rate >= 85% AND (if there is a switch)
-   reach rate >= 50%, or after 4 rounds, whichever comes first. **`Quality: LOW DIVERSITY` means the generator emits the same few templates with
+   reach rate >= 50% (the hard floor is 30%), or after 4 rounds, whichever comes first. **`Quality: LOW DIVERSITY` means the generator emits the same few templates with
    different constants (e.g. exactly 8 queries per case, 100% valid, a dozen plan shapes): it is not a test, it does not count, and the report lists it
    as such. A good generator makes random STRUCTURAL choices (which clause, which join type, nesting depth, how many subqueries, which functions) and
    gets a few percent invalid queries.** The pilot `delim_cte_subqueries.py` is the bar: ~200 templates per 30 cases, hundreds of plan shapes. Do not game the numbers: trivial queries that are always valid but never

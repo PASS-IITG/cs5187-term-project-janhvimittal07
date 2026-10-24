@@ -73,7 +73,24 @@ def skeleton(sql: str) -> str:
     t = re.sub(r"\b[a-z_][a-z0-9_]*\b", lambda m: m.group(0) if m.group(0) in vocab or m.group(0) in ("s", "n") else "i", t)
     t = re.sub(r"\b(?:i\s*\.\s*)+i\b", "i", t)                 # a.b.c -> i
     t = re.sub(r"\bi(\s*,\s*i)+\b", "i", t)                      # column lists of different lengths -> i
-    return re.sub(r"\s+", " ", t).strip()
+    toks = re.findall(r"\w+|[^\w\s]", t)
+    changed = True
+    while changed:                                   # "+ N + N + N" -> "+ N"; IN-lists / ORDER BY lists of any length -> one
+        changed = False
+        for w in range(1, 9):
+            i, out = 0, []
+            while i < len(toks):
+                if i + 2 * w <= len(toks) and toks[i:i + w] == toks[i + w:i + 2 * w]:
+                    j = i + w
+                    while j + w <= len(toks) and toks[j:j + w] == toks[i:i + w]:
+                        j += w
+                    out += toks[i:i + w]
+                    i, changed = j, True
+                else:
+                    out.append(toks[i])
+                    i += 1
+            toks = out
+    return " ".join(toks)
 
 
 ALLOWED_IMPORTS = {"random", "itertools", "string", "math", "textwrap", "functools", "collections"}
@@ -190,12 +207,26 @@ def classify(e):
     if n == "InternalException" or "INTERNAL Error" in m: return "internal"
     return "err"
 
-def plan_sig(con, sql):
+def plan_info(con, sql):
+    """(operator-tree signature, expression-level signature) from EXPLAIN (FORMAT JSON); None if EXPLAIN fails.
+    The tree is the shape of the physical plan; the expression-level text additionally contains each operator's details
+    (conditions, projections, aggregates) with digits removed, so rewrites that do not change the operators still show."""
     try:
-        text = "\n".join(str(r[1]) for r in con.execute("EXPLAIN " + sql).fetchall())
+        j = json.loads(con.execute("EXPLAIN (FORMAT JSON) " + sql).fetchall()[0][1])
     except Exception:
         return None
-    return " ".join(re.findall(r"\b[A-Z][A-Z_]{3,}\b", text))
+    def tree(n):
+        if isinstance(n, list): return "(" + ",".join(tree(x) for x in n) + ")"
+        ch = n.get("children") or []
+        return n.get("name", "?") + ("[" + ",".join(tree(c) for c in ch) + "]" if ch else "")
+    def full(n):
+        if isinstance(n, list): return "|".join(full(x) for x in n)
+        ei = re.sub(r"\d+", "N", json.dumps(n.get("extra_info", {}), sort_keys=True))
+        return n.get("name", "?") + ei + "[" + "|".join(full(c) for c in (n.get("children") or [])) + "]"
+    return tree(j), full(j)
+
+def strip_comments(sql):
+    return re.sub(r"--[^\n]*|/\*.*?\*/", " ", sql, flags=re.S)
 
 def run_config(case, pre):
     con = duckdb.connect(":memory:")
@@ -238,19 +269,22 @@ for case in d["cases"]:
     for i, q in enumerate(case["queries"]):
         st, val = base[i]
         info = {"i": i, "status": st, "msg": val if st != "ok" else "", "reach": None, "sig": None}
-        # reach: does EXPLAIN change when the target switch is flipped?
-        if sw and st == "ok":
-            a = plan_sig(con, q["sql"])
-            c2 = runs["switch_off"][0]
-            b = plan_sig(c2, q["sql"])
-            info["sig"] = hashlib.md5((a or "").encode()).hexdigest()[:10]
-            info["reach"] = bool(a and b and a != b)
+        # plan shape (always) and reach (only with a switch): does the plan change when the target switch is flipped?
+        if st == "ok":
+            a = plan_info(con, q["sql"])
+            info["sig"] = hashlib.md5(a[0].encode()).hexdigest()[:10] if a else None
+            if sw:
+                b = plan_info(runs["switch_off"][0], q["sql"])
+                info["reach"] = bool(a and b and a[1] != b[1])
+                info["reach_tree"] = bool(a and b and a[0] != b[0])
         findings = []
         for name, (c, res) in runs.items():
             s2, v2 = res[i]
             if s2 in ("internal", "fatal"):
                 findings.append({"kind": s2, "config": name, "detail": str(v2)[:200]})
-        comparable = not q.get("unordered") and not NONDET.search(q["sql"]) and not (LIMITY.search(q["sql"]) and "order by" not in q["sql"].lower())
+        bare = strip_comments(q["sql"])          # words inside comments must not switch the comparison off; the "unordered" flag is ignored (rows are compared as sorted lists anyway)
+        comparable = not NONDET.search(bare) and not (LIMITY.search(bare) and "order by" not in bare.lower())
+        info["comparable"] = bool(comparable and st == "ok")
         if comparable and st == "ok":
             for name, (c, res) in runs.items():
                 if name in ("default", "verify"): continue
@@ -264,6 +298,26 @@ for case in d["cases"]:
     print(json.dumps(out), flush=True)
 print(json.dumps({"done": True}), flush=True)
 '''
+
+
+def quality_verdict(*, nq: int, nvalid: int, templates: int, shapes: int, cases: int, reach_rate: float | None,
+                    comparable_rate: float, has_switch: bool, target=None) -> tuple[list[str], list[str]]:
+    """Hard flags (any one = LOW DIVERSITY) and soft warnings. Shared by the runner and by `targeted_run.py --audit`,
+    which recomputes the verdict from the stored counts instead of trusting the stored word."""
+    flags, warns = [], []
+    need_t = max(30, int(0.02 * nvalid))          # distinct SHAPES of valid queries (identifiers / literals removed, repeats collapsed)
+    need_s = max(15, int(0.03 * cases))           # ~30 distinct physical-plan OPERATOR TREES per 1000 cases, switch or not
+    if templates < need_t:
+        flags.append(f"only {templates} distinct valid-query skeletons for {nvalid} valid queries (need >= {need_t})")
+    if nvalid >= 100 and shapes < need_s:
+        flags.append(f"only {shapes} distinct physical-plan operator trees for {cases} cases (need >= {need_s})")
+    if has_switch and nvalid >= 100 and (reach_rate or 0.0) < 0.3:
+        flags.append(f"reach rate {(reach_rate or 0.0):.0%} < 30%: the queries rarely exercise the target ({target})")
+    if nvalid >= 100 and comparable_rate < 0.5:
+        flags.append(f"only {comparable_rate:.0%} of valid queries take part in the result comparison across configurations")
+    if nq and nvalid == nq:
+        warns.append("100% of queries are valid: a real generator hits some binder errors on unusual shapes")
+    return flags, warns
 
 
 def switch_statement(target: dict) -> str:
@@ -331,7 +385,7 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
     out_dir = out_dir or OUT / name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    nq = nvalid = nreach = ncomparable = 0
+    nq = nvalid = nreach = nreach_tree = ncomparable = 0
     templates: set[str] = set()
     per_case: Counter = Counter()
     sigs: Counter = Counter()
@@ -351,8 +405,10 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
                 templates.add(skeleton(sql))
             if info["status"] == "ok":
                 nvalid += 1
+                ncomparable += 1 if info.get("comparable") else 0
                 if info["sig"]:
                     sigs[info["sig"]] += 1
+                nreach_tree += 1 if info.get("reach_tree") else 0
                 if info["reach"]:
                     nreach += 1
                     if len(examples["reach"]) < 2:
@@ -380,21 +436,20 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
         uniq.setdefault((h["kind"], h["config"], re.sub(r"\d+", "N", h["detail"])[:80]), h)
     (out_dir / "hits.jsonl").write_text("".join(json.dumps(h) + "\n" for h in uniq.values()))
     shapes = len(sigs)
-    flags, warns = [], []
-    need_t = max(30, int(0.02 * nvalid))                         # distinct SHAPES of valid queries (identifiers/literals removed)
-    need_s = max(15, int(0.03 * len(results)))                   # ~30 plan shapes per 1000 cases
-    if len(templates) < need_t:
-        flags.append(f"only {len(templates)} distinct valid-query skeletons for {nvalid} valid queries (need >= {need_t})")
-    if sw and nvalid >= 100 and shapes < need_s:
-        flags.append(f"only {shapes} distinct plan shapes for {len(results)} cases (need >= {need_s})")
+    flags, warns = quality_verdict(nq=nq, nvalid=nvalid, templates=len(templates), shapes=shapes, cases=len(results),
+                                   reach_rate=(nreach / nvalid if nvalid else 0.0) if sw else None,
+                                   comparable_rate=(ncomparable / nvalid if nvalid else 0.0), has_switch=bool(sw), target=target)
+    comparable_rate = ncomparable / nvalid if nvalid else 0.0
     if len(per_case) == 1 and nq >= 200:
         warns.append(f"every case has exactly {next(iter(per_case))} queries (fine only if the queries themselves vary structurally)")
-    if nq and nvalid == nq:
-        warns.append("100% of queries are valid: a real generator hits some binder errors on unusual shapes")
+    if sw and nreach and nreach_tree / nreach < 0.3:
+        warns.append("most reaching queries change only expressions, not operators (fine for expression-level optimizers, check the examples)")
     quality = "LOW DIVERSITY - NOT A REAL TEST" if flags else "ok"
     metrics = {
         "quality": quality, "quality_flags": flags, "quality_warnings": warns, "distinct_templates": len(templates),
-        "author_model": meta.get("author_model"),
+        "author_model": meta.get("author_model"), "generator_sha256": hashlib.sha256(src.encode()).hexdigest(),
+        "target_key": json.dumps(target, sort_keys=True), "comparable_rate": round(comparable_rate, 3),
+        "reach_tree_rate": round(nreach_tree / nvalid, 3) if (nvalid and sw) else None,
         "queries_per_case": dict(sorted(per_case.items())),
         "generator": str(path), "name": name, "target": target, "n_cases": n, "generator_errors": dict(gen_errors),
         "cases_run": len(results), "setup_ok": sum(1 for r in results if r.get("valid_setup")),
@@ -422,9 +477,9 @@ def feedback_text(m: dict) -> str:
          f"* queries {m['queries']}, valid {m['valid_queries']} (**valid rate {m['valid_rate']:.1%}**)"]
     if m["has_switch"]:
         L.append(f"* **reach rate {m['reach_rate']:.1%}** of valid queries: the plan changes when the target switch ({m['target']}) is flipped; "
-                 f"{m['distinct_plan_signatures']} distinct plan shapes")
+                 f"{m['distinct_plan_signatures']} distinct operator trees")
     else:
-        L.append(f"* no target switch for this feature, so reach cannot be measured; {m['distinct_plan_signatures']} distinct plan shapes")
+        L.append(f"* no target switch for this feature, so reach cannot be measured; {m['distinct_plan_signatures']} distinct operator trees")
     L.append(f"* findings: {m['hits_unique']} unique {m['hit_kinds'] or ''}")
     if m["generator_errors"]:
         L += ["", "## generate() raised errors (fix these)", *[f"* {e} x{n}" for e, n in m["generator_errors"].items()]]

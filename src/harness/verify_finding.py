@@ -164,26 +164,43 @@ def upstream_check(message: str, frames: list[str], pause: float = 8.0) -> tuple
 KNOWN_ISSUES_PATH = HERE / "known_issues.json"
 
 
-def match_registry(message: str, frames: list[str], script: str) -> list[dict]:
+def _strip_sql(script: str) -> str:
+    """Script without comments and string literals: shape words in a comment or a string must not count."""
+    t = re.sub(r"/\*.*?\*/|--[^\n]*", " ", script, flags=re.S)
+    t = re.sub(r"'(?:[^']|'')*'", "''", t)
+    return re.sub(r"\s+", " ", t.lower())
+
+
+def _entry_hits(k: dict, message: str, frames: list[str]) -> bool:
+    return bool(k.get("message_regex") and re.search(k["message_regex"], message or "")) or \
+           bool(k.get("frames_regex") and any(re.search(k["frames_regex"], f) for f in frames or []))
+
+
+def match_registry(message: str, frames: list[str], script: str, depends_on: dict | None = None,
+                   other_messages: list[str] | None = None) -> list[dict]:
     """Compare a finding with the registry of issues we already know (known_issues.json), BEFORE any GitHub search.
 
-    relation "rediscovery": same error AND same shape as the known issue (an independent rediscovery, never a new finding)
-    relation "sibling":     same error text but the script lacks the known issue's shape: possibly the same code failing in a NEW
-                            way, so it is surfaced to a human instead of being suppressed."""
+    "rediscovery": same error AND the entry's required script shape (comments/strings ignored) AND, if listed, the same
+                   `depends_on` settings (it disappears when they are switched off): an independent rediscovery.
+    "sibling":     everything else that matches the error text: possibly the same code failing in a NEW way, so it is
+                   surfaced to a human. Entries WITHOUT a shape can only ever give "sibling" (an error message alone is not proof).
+                   If the script also raised errors that match no known issue, it is downgraded to "sibling" too."""
     try:
         reg = json.loads(KNOWN_ISSUES_PATH.read_text())
     except (OSError, ValueError):
         return []
-    low = re.sub(r"\s+", " ", script.lower())
+    low = _strip_sql(script)
+    unmatched = [m for m in (other_messages or []) if m and not any(_entry_hits(k, m, []) for k in reg)]
     out = []
     for k in reg:
-        hit = bool(k.get("message_regex") and re.search(k["message_regex"], message or "")) or \
-              bool(k.get("frames_regex") and any(re.search(k["frames_regex"], f) for f in frames or []))
-        if not hit:
+        if not _entry_hits(k, message, frames):
             continue
-        shape_ok = all(t in low for t in k.get("shape_all", []))
+        shape = k.get("shape_all")
+        shape_ok = bool(shape) and all(t in low for t in shape)
+        dep_ok = True if depends_on is None else all(depends_on.get(d) for d in k.get("depends_on", []))
+        rel = "rediscovery" if (shape_ok and dep_ok and not unmatched) else "sibling"
         out.append({"issue": k["issue"], "ours": bool(k.get("ours")), "status": k.get("status", ""), "title": k.get("title", ""),
-                    "relation": "rediscovery" if shape_ok else "sibling"})
+                    "relation": rel, "unmatched_other_errors": len(unmatched)})
     return out
 
 
@@ -233,7 +250,9 @@ def verify(sql: str, dev_site: str = "", search: bool = False) -> dict:
         # reproduces on 2.0.0 but not on the newer development snapshot: already fixed upstream, not a new finding
         "fixed_in_dev": bool(verdict != "not_reproducible" and runs.get("dev", {}).get("status") == "ok"),
     }
-    out["registry"] = match_registry(msg, out["frames"], sql)
+    all_msgs = list(dict.fromkeys(m for r in runs.values() for m in r.get("internal", [])))
+    out["internal_messages"] = [normalise(m) for m in all_msgs][:6]
+    out["registry"] = match_registry(msg, out["frames"], sql, out["depends_on"], [m for m in all_msgs if m != msg])
     if search and not out["registry"]:
         out["search_terms"], out["upstream_hits"] = upstream_check(msg, out["frames"])
     return out
