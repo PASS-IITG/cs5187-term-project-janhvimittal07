@@ -102,7 +102,8 @@ The engine, not you, judges every generator (`harness/gen_runner.py`); nothing y
    changed code (`results/hints-v200-new.json`, see the runbook for how to make it), and the matching feature card in
    `results/feature-cards.json` and tests in `corpus/seeds-v200-added/` for the exact syntax. Note the branches, limits and special cases.
 3. *Write the generator* into `$FUZZ_WORK/generators/<name>.py` (never into the repo). Start from the template
-   `src/gen/llm_generators/delim_cte_subqueries.py` and keep its contract: `META` (with `"author_model"` set to the name of the
+   `src/gen/llm_generators/delim_cte_subqueries.py` (and look at the two short examples `example_grouping_sets.py` and `example_join_trees.py`: 25-30 lines each,
+   random structure, they pass the judge) and keep its contract: `META` (with `"author_model"` set to the name of the
    model that wrote it) and a pure `generate(rng)` that returns `{"setup": [...], "queries": [...]}`. Only `random`, `itertools`,
    `string`, `math`, `textwrap`, `functools`, `collections` may be imported; no files, no network, no extensions; the checker rejects the rest.
 4. *Run the judge:* `PY src/harness/gen_runner.py check $FUZZ_WORK/generators/<name>.py` (30 cases, about a minute). It prints
