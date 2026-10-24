@@ -18,6 +18,9 @@ repository does the work; **your job is to start it, keep it healthy, and report
   `Quality: ok`, ran >= 3000 cases and name their author model; a fresh RUN_REPORT; FINAL_SUMMARY and AGENT_NOTES; at least 20 fix dossiers worked;
   coverage for BOTH A1 (generic baseline) and A4 from the same build; every candidate in the report discussed. A summary that says "all done" without
   a passing audit is wrong, whatever the numbers look like.
+  The audit recomputes each generator's quality from its stored counts, ties the metrics to the generator file (the hash must match), needs >= 6 distinct
+  targets, a verdict next to each dossier id, and coverage arms that differ. It stops lazy over-claiming; it cannot stop deliberate forgery, so a human still
+  reads the generators, `metrics.json` and the reduced reproducers before anything goes into the paper.
 * The report separates **rediscoveries** (an issue we already know; never a finding), **sibling candidates** (the error text of a known issue but a
   different shape: read these first, they may be new), upstream matches, fixed-in-snapshot, and artifacts. Do not call a rediscovery a bug found.
 
