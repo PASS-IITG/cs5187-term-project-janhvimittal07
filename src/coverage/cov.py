@@ -538,7 +538,7 @@ class Coverage:
 
 
 
-def assert_build_version(tag: str = "v2.0.0") -> None:
+def assert_build_version(tag: str = "v2.0.0") -> str:
     """Refuse to produce coverage numbers from a build of a different release (a stale build gives silently wrong numbers)."""
     if not BIN.exists():
         sys.exit(f"{BIN} missing: FUZZ_WORK={WORK} JOBS=3 bash {CODE}/build.sh cov   (about 1 hour, nothing else heavy running)")
@@ -550,6 +550,7 @@ def assert_build_version(tag: str = "v2.0.0") -> None:
     if want and want not in out:
         sys.exit(f"{BIN} is not {tag} ({want}): it reports {out.strip()[-40:]!r}. Rebuild: rm -rf {WORK}/build-cov && "
                  f"FUZZ_WORK={WORK} JOBS=3 bash {CODE}/build.sh cov")
+    return want
 
 
 def main() -> None:
@@ -597,8 +598,12 @@ def main() -> None:
     p_chg.add_argument("--workdir", default=str(WORK / "results" / "cov"))
     p_chg.add_argument("--json", default="", help="also write the result as JSON")
 
+    # compare
+    p_cmp = sub.add_parser("compare", help="Side-by-side changed-lines coverage of several arms (needs the generic baseline A1)")
+    p_cmp.add_argument("arms", nargs="+", help="NAME=path/to/changed.json, e.g. A1=results/cov-A1/changed.json A4=results/cov-A4/changed.json")
+
     # Legacy support: no subcmd but args like "report"
-    if len(sys.argv) > 1 and sys.argv[1] not in ("report", "uncovered", "hints", "functions", "export-report", "run-dir", "changed", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] not in ("report", "uncovered", "hints", "functions", "export-report", "run-dir", "changed", "compare", "-h", "--help"):
         args = ap.parse_args(["report"] + sys.argv[1:])
     else:
         args = ap.parse_args()
@@ -619,12 +624,31 @@ def main() -> None:
         s = c.summary(DEFAULT_FILTERS)
         print(f"lines {s['lines_hit']}/{s['lines']} ({s['line_pct']:.2f}%)")
         return
+    if args.cmd == "compare":
+        arms = {}
+        for a_ in args.arms:
+            name, _, path = a_.partition("=")
+            arms[name] = json.loads(Path(path).read_text())
+        ids = {v.get("build_source_id") for v in arms.values()}
+        if len(ids) != 1 or None in ids:
+            sys.exit(f"arms were measured on different or unknown builds {ids}: the numbers are not comparable")
+        if "A1" not in arms:
+            sys.exit("no generic baseline: pass A1=... (an arm without a baseline shows no improvement)")
+        base = arms["A1"]["pct"]
+        print(f"build {ids.pop()}; changed executable lines {arms['A1']['changed_executable_lines']}")
+        for n, v in arms.items():
+            print(f"  {n:6} {v['covered']:7d} lines covered = {v['pct']:6.2f}%   ({v['pct'] - base:+.2f} points vs A1)")
+        subs = sorted({k for v in arms.values() for k in v["by_subsystem"]})
+        print("  per subsystem (% covered):", " | ".join(f"{k.split('/')[-1]}:" + "/".join(f"{arms[n]['by_subsystem'].get(k, {}).get('pct', 0):.0f}" for n in arms) for k in subs[:10]))
+        return
     if args.cmd == "changed":
-        assert_build_version(args.new)
+        build_id = assert_build_version(args.new)
         c = Coverage(args.workdir)
         if not c.profdata.exists():
             sys.exit(f"{c.profdata} does not exist: run `cov.py run-dir DIR --workdir {args.workdir}` first")
         r = c.changed_coverage(args.old, args.new)
+        r["build_source_id"] = build_id
+        r["scripts_replayed"] = len(list(Path(args.workdir).glob("*.profraw"))) or None
         print(f"coverage of lines added/changed {r['old']}..{r['new']} (SQL-reachable code): {r['covered']}/{r['changed_executable_lines']} = {r['pct']}%")
         for k, v in r["by_subsystem"].items():
             print(f"  {k:28s} {v['covered']:6d}/{v['lines']:<6d} {v['pct']:5.1f}%")

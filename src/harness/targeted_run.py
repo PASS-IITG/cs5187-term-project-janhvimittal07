@@ -165,6 +165,33 @@ class Run:
             if self.a.smoke:
                 break
 
+    def fill_remaining(self, trig_n: int, bu_n: int, join_n: int) -> None:
+        """The looping phases stop at their slice of the budget and the one-shot phases finish early; spend what is left on fresh seeds."""
+        used = [int(re.search(r"_s(\d+)$", k).group(1)) for k in self.state["done"] if re.search(r"_s\d+$", k)]
+        seed = max(used + [self.a.seed_base]) + 1
+        cycle = [("trig", lambda sd: [PY, str(HERE / "fuzz_triggers.py"), "--n", str(trig_n), "--seed", str(sd)], 12,
+                  lambda sd: [WORK / "results" / "triggers" / f"hits-seed{sd}.jsonl"]),
+                 ("bu", lambda sd: [PY, str(HERE / "bottomup.py"), "--n", str(bu_n), "--seed", str(sd)], 4,
+                  lambda sd: [WORK / "results" / "bottomup" / "hits.jsonl"]),
+                 ("win", lambda sd: [PY, str(HERE / "fuzz_windows.py"), "--n", str(bu_n), "--seed", str(sd)], 4,
+                  lambda sd: [WORK / "results" / "windows" / f"hits-seed{sd}.jsonl"]),
+                 ("join", lambda sd: [PY, str(HERE / "fuzz_joins.py"), "--n", str(join_n), "--seed", str(sd)], 25,
+                  lambda sd: [WORK / "results" / "joins" / f"hits-seed{sd}.jsonl"])]
+        n = skips = 0
+        while self.left() > (self.a.reserve_min + 5) * 60:
+            name, mk, minutes, hf = cycle[n % len(cycle)]
+            n += 1
+            if self.left() < (self.a.reserve_min + minutes * 2.5) * 60:       # this tool's unit would not fit: try the next one
+                skips += 1
+                if skips >= len(cycle):
+                    break
+                continue
+            skips = 0
+            if not self.unit(f"{name}_s{seed}", mk(seed), minutes * 120, hf(seed)):
+                break
+            seed += 1
+        self.log("fill", 0, 0, f"filled idle time with seeds up to {seed - 1}; {self.left() / 3600:.1f} h left before the report reserve")
+
     def run_all(self) -> None:
         a = self.a
         s = a.smoke
@@ -197,6 +224,9 @@ class Run:
             self.unit("mutate", [PY, str(HERE / "mutate_corpus.py"), "--seeds", str(added), "--n", "150" if s else "6000", "--out", str(mut), "--seed", "1"], 900)
             self.unit("asan_mutants", [PY, str(HERE / "asan_replay.py"), "--sql-dir", str(mut), "--out", str(OUT / "asan-mutants")]
                       + (["--limit", "200"] if s else []), max(600.0, self.slice_end(0, 0.85) - time.time()), [OUT / "asan-mutants" / "hits.jsonl"])
+        # 6b use the idle time: keep running new seeds of the wheel-based tools until the deadline minus the reserve
+        if not a.smoke and not a.no_fill:
+            self.fill_remaining(trig_n, bu_n, join_n)
         # 7 llm
         if a.llm:
             if os.environ.get("LLM_BASE_URL") and os.environ.get("LLM_MODEL"):
@@ -209,6 +239,51 @@ class Run:
             else:
                 self.log("llm", 0, 0, "skipped: LLM_BASE_URL / LLM_MODEL not set")
         self.report()
+
+
+    def audit(self) -> int:
+        """Mechanical check of the requirements in docs/AGENT_BRIEF.md. 'Finished' may only be said if this returns 0."""
+        results: list[tuple[bool, str]] = []
+
+        def chk(ok: bool, msg: str) -> None:
+            results.append((ok, msg))
+
+        p = subprocess.run([PY, str(HERE / "preflight.py")], capture_output=True, text=True, env=ENV)
+        chk(p.returncode == 0, f"preflight: {(p.stdout.strip().splitlines() or [''])[-1]}")
+        gens = []
+        for mf in sorted((OUT / "gens").glob("*/metrics.json")) if (OUT / "gens").exists() else []:
+            if mf.parent.name.startswith("_"):
+                continue
+            try:
+                gens.append((mf, json.loads(mf.read_text())))
+            except ValueError:
+                pass
+        good = [g for _, g in gens if g.get("quality") == "ok" and g.get("cases_run", 0) >= 3000 and g.get("author_model")]
+        chk(len(good) >= self.a.min_generators,
+            f"generators: {len(good)} of {len(gens)} are quality-ok, >= 3000 cases and have author_model (need {self.a.min_generators}); "
+            f"not counted: {[g['name'] + ':' + ('low-diversity' if g.get('quality') != 'ok' else 'cases=' + str(g.get('cases_run')) if g.get('cases_run', 0) < 3000 else 'no author_model') for _, g in gens if g not in good][:8]}")
+        rep = OUT / "RUN_REPORT.md"
+        newest = max([mf.stat().st_mtime for mf, _ in gens] + [0])
+        chk(rep.exists() and rep.stat().st_mtime >= newest,
+            "RUN_REPORT.md exists and is newer than the last generator run (rerun `targeted_run.py --report-only`)")
+        notes = " ".join((OUT / f).read_text(errors="replace") for f in ("AGENT_NOTES.md", "FINAL_SUMMARY.md") if (OUT / f).exists())
+        chk((OUT / "FINAL_SUMMARY.md").exists() and (OUT / "AGENT_NOTES.md").exists(), "FINAL_SUMMARY.md and AGENT_NOTES.md exist")
+        dossiers = [f.stem for f in (OUT / "dossiers").glob("*.md")] if (OUT / "dossiers").exists() else []
+        worked = [d for d in dossiers if d in notes]
+        chk(len(worked) >= self.a.min_dossiers, f"fix dossiers worked: {len(worked)} named in the notes (need {self.a.min_dossiers}; {len(dossiers)} exist)")
+        covs = {f.parent.name: json.loads(f.read_text()) for f in (WORK / "results").glob("cov-A*/changed.json")}
+        ids = {v.get("build_source_id") for v in covs.values()}
+        chk("cov-A1" in covs and "cov-A4" in covs and len(ids) == 1 and None not in ids,
+            f"coverage: arms found {sorted(covs)}; both A1 (baseline) and A4 are required, from one build ({ids})")
+        text = rep.read_text() if rep.exists() else ""
+        cands = re.findall(r"cand\d{3}", text)
+        missing = sorted({c for c in cands if c not in notes})
+        chk(not missing, f"every candidate in the report is discussed in FINAL_SUMMARY/AGENT_NOTES (not discussed: {missing[:6]})")
+        for ok, msg in results:
+            print(("[PASS] " if ok else "[FAIL] ") + msg)
+        bad = [m for ok, m in results if not ok]
+        print("\nAUDIT PASSED" if not bad else f"\nAUDIT FAILED: {len(bad)} item(s). Do not say the work is finished; list the FAIL lines above and fix them.")
+        return 0 if not bad else 1
 
     # -------------------------------------------------------------- report
     def candidates(self) -> list[dict]:
@@ -281,15 +356,22 @@ class Run:
             except Exception as e:                                   # noqa: BLE001
                 v = {"verdict": "verify_error", "signature": str(e)[:100], "fixed_in_dev": False, "example_message": ""}
             v.update(file=str(f), tool=c["tool"], id=c["id"], kind=c["kind"], count=len(items), detail=c["detail"])
-            if v["verdict"] in ("reproduces", "asan_only") and not v.get("fixed_in_dev"):
+            if v["verdict"] in ("reproduces", "asan_only"):
+                v["registry"] = verify_finding.match_registry(v.get("example_message", ""), v.get("frames", []), c["script"])
+            if v["verdict"] in ("reproduces", "asan_only") and not v.get("fixed_in_dev") and not v.get("registry"):
                 v["search_terms"], v["upstream_hits"] = verify_finding.upstream_check(v.get("example_message", ""), v.get("frames", []))
             verified.append(v)
             print(f"[verify {i}] {v['verdict']:16} x{len(items):<3} {c['tool']:14} {v.get('signature', '')[:70]}", flush=True)
         # classify
-        new, known, fixed, artifact, unsearched = [], [], [], [], []
+        new, known, fixed, artifact, unsearched, siblings, rediscovered = [], [], [], [], [], [], []
         for v in verified:
+            reg = v.get("registry") or []
             if v["verdict"] == "not_reproducible" or v["verdict"] == "verify_error":
                 artifact.append(v)
+            elif any(r["relation"] == "sibling" for r in reg) and not any(r["relation"] == "rediscovery" for r in reg):
+                siblings.append(v)          # same error as a known issue, DIFFERENT shape: never suppressed
+            elif reg:
+                rediscovered.append(v)      # independent rediscovery of an issue we already know (never a new finding)
             elif v.get("fixed_in_dev"):
                 fixed.append(v)
             elif v.get("upstream_hits"):
@@ -306,6 +388,8 @@ class Run:
              f"* hits collected: {len(cands)} ({len(auto)} auto-verifiable, {len(review)} need human review)",
              f"* distinct auto-verifiable groups verified: {len(verified)}",
              f"* **CANDIDATE NEW (reproduces alone, not fixed in the newer snapshot, nothing found upstream): {len(new)}**",
+             f"* **SIBLING CANDIDATES (same error text as a known issue but a different shape - read these first): {len(siblings)}**",
+             f"* rediscoveries of issues we already know (registry): {len(rediscovered)}",
              f"* reproduces but matches an upstream issue/PR (probably known): {len(known)}",
              f"* reproduces but could NOT be searched upstream (no error text or stack frames): {len(unsearched)}  <- a human must search by hand",
              f"* already fixed in the development snapshot: {len(fixed)}",
@@ -326,6 +410,13 @@ class Run:
             L.append("")
 
         table("CANDIDATE NEW - a human must still read the script, reduce it, and search upstream by hand", new)
+        table("SIBLING CANDIDATES - same error as a known issue, different shape: a human must reduce and compare these", siblings)
+        if rediscovered:
+            L += ["## Rediscoveries (already known; NOT new findings)", ""]
+            for v in rediscovered:
+                r = (v.get("registry") or [{}])[0]
+                L.append(f"* `{v['file']}` ({v['tool']}): rediscovery of #{r.get('issue')}{' (OUR issue)' if r.get('ours') else ''} - {r.get('title', '')} [{r.get('status', '')}]")
+            L.append("")
         table("Reproduces, but upstream has matching reports (check each)", known)
         table("Reproduces but not searchable automatically - search upstream by hand before believing it is new", unsearched)
         table("Already fixed in the development snapshot", fixed)
@@ -360,7 +451,7 @@ class Run:
               "* Nothing here was filed or pushed. Every 'candidate' still needs a human to read the SQL and search upstream.",
               "* Counts are real counts from this run; do not round up in the paper.", ""]
         (OUT / "RUN_REPORT.md").write_text("\n".join(L))
-        self.log("report", 0, 0, f"{len(new)} candidate new, {len(known)} known?, {len(unsearched)} unsearched, {len(fixed)} fixed, {len(artifact)} artifacts -> RUN_REPORT.md")
+        self.log("report", 0, 0, f"{len(new)} candidate new, {len(siblings)} siblings, {len(rediscovered)} rediscoveries, {len(known)} known?, {len(unsearched)} unsearched, {len(fixed)} fixed, {len(artifact)} artifacts -> RUN_REPORT.md")
         print(f"\nDONE. Report: {OUT / 'RUN_REPORT.md'}")
 
 
@@ -373,12 +464,18 @@ def main() -> None:
     ap.add_argument("--seed-base", type=int, default=100)
     ap.add_argument("--reserve-min", type=float, default=25.0, help="minutes kept for triage and the report")
     ap.add_argument("--max-verify", type=int, default=60)
+    ap.add_argument("--min-generators", type=int, default=12)
+    ap.add_argument("--min-dossiers", type=int, default=20)
+    ap.add_argument("--no-fill", action="store_true", help="do not spend idle time on extra seeds")
+    ap.add_argument("--audit", action="store_true", help="check the brief's requirements mechanically; only say 'finished' if it prints AUDIT PASSED")
     ap.add_argument("--report-only", action="store_true", help="skip all runs; verify the hits collected so far and write RUN_REPORT.md")
     a = ap.parse_args()
     if a.smoke:
         a.hours = max(a.hours, 0.5) if a.hours != 12.0 else 0.5
         a.reserve_min = 8
     r = Run(a)
+    if a.audit:
+        sys.exit(r.audit())
     r.preflight()
     if a.report_only:
         r.report()

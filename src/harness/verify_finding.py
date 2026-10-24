@@ -161,6 +161,32 @@ def upstream_check(message: str, frames: list[str], pause: float = 8.0) -> tuple
     return terms[:4], uniq
 
 
+KNOWN_ISSUES_PATH = HERE / "known_issues.json"
+
+
+def match_registry(message: str, frames: list[str], script: str) -> list[dict]:
+    """Compare a finding with the registry of issues we already know (known_issues.json), BEFORE any GitHub search.
+
+    relation "rediscovery": same error AND same shape as the known issue (an independent rediscovery, never a new finding)
+    relation "sibling":     same error text but the script lacks the known issue's shape: possibly the same code failing in a NEW
+                            way, so it is surfaced to a human instead of being suppressed."""
+    try:
+        reg = json.loads(KNOWN_ISSUES_PATH.read_text())
+    except (OSError, ValueError):
+        return []
+    low = re.sub(r"\s+", " ", script.lower())
+    out = []
+    for k in reg:
+        hit = bool(k.get("message_regex") and re.search(k["message_regex"], message or "")) or \
+              bool(k.get("frames_regex") and any(re.search(k["frames_regex"], f) for f in frames or []))
+        if not hit:
+            continue
+        shape_ok = all(t in low for t in k.get("shape_all", []))
+        out.append({"issue": k["issue"], "ours": bool(k.get("ours")), "status": k.get("status", ""), "title": k.get("title", ""),
+                    "relation": "rediscovery" if shape_ok else "sibling"})
+    return out
+
+
 def verify(sql: str, dev_site: str = "", search: bool = False) -> dict:
     stmts = split(sql)
     py = sys.executable
@@ -207,7 +233,8 @@ def verify(sql: str, dev_site: str = "", search: bool = False) -> dict:
         # reproduces on 2.0.0 but not on the newer development snapshot: already fixed upstream, not a new finding
         "fixed_in_dev": bool(verdict != "not_reproducible" and runs.get("dev", {}).get("status") == "ok"),
     }
-    if search:
+    out["registry"] = match_registry(msg, out["frames"], sql)
+    if search and not out["registry"]:
         out["search_terms"], out["upstream_hits"] = upstream_check(msg, out["frames"])
     return out
 

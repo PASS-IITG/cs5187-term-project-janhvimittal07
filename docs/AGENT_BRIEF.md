@@ -10,6 +10,17 @@ repository does the work; **your job is to start it, keep it healthy, and report
 * The repo's scripts target code that is **new in 2.0** (triggers, the delim-join-to-CTE rewrite, new optimizers, ...)
   and verify every hit mechanically. Do not replace them with your own ad-hoc fuzzing; your own SQL goes through Phase B, which feeds the same verification.
 
+## Which model, and how "finished" is decided
+* Use the strongest model your environment offers for Phase B (for example Claude Opus 5.5 or Fable 5.1 if your tool lets you pick them; check the
+  picker, do not assume). Writing generators is the hard, creative part. Record the model in every generator's `META["author_model"]`.
+* **You may only say the work is finished when `PY src/harness/targeted_run.py --audit` prints `AUDIT PASSED`.** If it prints `AUDIT FAILED`, paste the
+  `[FAIL]` lines, say what is missing, and fix them or stop and report them. The audit checks: preflight; at least 12 generators that are
+  `Quality: ok`, ran >= 3000 cases and name their author model; a fresh RUN_REPORT; FINAL_SUMMARY and AGENT_NOTES; at least 20 fix dossiers worked;
+  coverage for BOTH A1 (generic baseline) and A4 from the same build; every candidate in the report discussed. A summary that says "all done" without
+  a passing audit is wrong, whatever the numbers look like.
+* The report separates **rediscoveries** (an issue we already know; never a finding), **sibling candidates** (the error text of a known issue but a
+  different shape: read these first, they may be new), upstream matches, fixed-in-snapshot, and artifacts. Do not call a rediscovery a bug found.
+
 ## Hard rules
 1. **Never** run `git push`, `git commit`, `gh issue create`, `gh pr ...`, `gh api` with POST/PATCH/DELETE, or anything that
    posts to the internet. Read-only `gh search` / `gh issue view` is allowed (and used by the scripts).
@@ -122,7 +133,9 @@ tag: use it to check "is this already fixed?" before spending time.
 * Record in `AGENT_NOTES.md`, per generator: target, iterations, valid/reach rate per iteration, model used, hits. Negative results too.
 * Real findings go through `PY src/harness/targeted_run.py --report-only` (verifies alone on every build, searches upstream). Do not
   describe anything as a bug before that report lists it, and then only as a *candidate*.
-* Aim for at least 15 generators (all 14 new optimizers + the dependent-join rewrite + feature interactions) and 20 dossiers worked.
+* Aim for at least 12 generators that pass the quality check (the new optimizers that can be targeted from plain SQL, the dependent-join rewrite, and feature
+  interactions; `remote_pushdown` and `partitioned_execution` need remote / partitioned data and `aggregate_function_rewriter` is only a rename of `sum_rewriter`,
+  so they may be skipped), each run for >= 3000 cases, and 20 dossiers worked (name each dossier id in AGENT_NOTES.md with the result).
 
 ## Phase C - coverage numbers for the paper (needs the coverage build; ask the human before starting the 1-hour build)
 The proposal promised "coverage improvements". Measure the coverage of the **lines added or changed since 1.5.6** (SQL-reachable code only)
@@ -139,6 +152,8 @@ for each arm, on a build of the SAME release. A stale build gives silently wrong
 3. `PY src/coverage/cov.py changed --workdir $FUZZ_WORK/results/cov-A4 --json $FUZZ_WORK/results/cov-A4/changed.json` prints the
    percentage of changed executable lines covered, per subsystem, and the files with the most uncovered lines (use that list as the
    next generator targets: it is the real coverage-guided loop). Do the same for A1 and A3 and report all numbers side by side.
+4. `PY src/coverage/cov.py compare A1=$FUZZ_WORK/results/cov-A1/changed.json A4=$FUZZ_WORK/results/cov-A4/changed.json` prints the arms side by side with the
+   difference to the baseline, and refuses to compare arms from different builds or without A1. Coverage must be recomputed after the generators are rewritten.
 Report in `FINAL_SUMMARY.md`: build id, number of scripts per arm, covered/total changed lines per arm. Do not round or drop an arm that looks bad.
 
 ## Known upstream bugs (never re-report)

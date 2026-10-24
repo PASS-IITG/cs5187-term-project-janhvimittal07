@@ -1,0 +1,42 @@
+[
+ {
+  "issue": 27759,
+  "ours": true,
+  "status": "open, labelled reproduced 2026-10-23",
+  "title": "row trigger cascading into a table with a BEFORE INSERT trigger fails in the delim_join_as_cte rewrite",
+  "message_regex": "Conflicting or cyclic column binding replacement",
+  "shape_all": [
+   "create trigger",
+   "for each row",
+   "before insert"
+  ]
+ },
+ {
+  "issue": 27446,
+  "status": "fixed on main (PR 27490)",
+  "title": "exprs.size() > 0 assertion, correlated HAVING true / statistics folding",
+  "message_regex": "exprs\\.size\\(\\) > 0"
+ },
+ {
+  "issue": 27448,
+  "status": "closed, fixed on main",
+  "title": "dense_rank() OVER () over an anti join, segfault",
+  "frames_regex": "WindowDenseRankExecutor|WindowExecutor"
+ },
+ {
+  "issue": 27450,
+  "status": "closed",
+  "title": "GetPartitioningSpaceRequirement: tuple width should not be 0",
+  "message_regex": "GetPartitioningSpaceRequirement"
+ },
+ {
+  "issue": 27631,
+  "status": "open, reproduced",
+  "title": "two MERGE trigger bodies, Failed to bind column reference",
+  "message_regex": "Failed to bind column reference",
+  "shape_all": [
+   "create trigger",
+   "merge into"
+  ]
+ }
+]

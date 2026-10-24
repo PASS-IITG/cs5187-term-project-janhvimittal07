@@ -50,6 +50,32 @@ import runner  # noqa: E402
 WORK = runner.WORK
 OUT = WORK / "results" / "targeted" / "gens"
 
+_VOCAB: set[str] | None = None
+
+
+def sql_vocab() -> set[str]:
+    """SQL keywords + function names of the target build: everything else in a query is an identifier / alias."""
+    global _VOCAB
+    if _VOCAB is None:
+        code = ("import duckdb;c=duckdb.connect();"
+                "print(' '.join([r[0] for r in c.execute('select keyword_name from duckdb_keywords()').fetchall()] + "
+                "[r[0] for r in c.execute('select distinct function_name from duckdb_functions()').fetchall()]))")
+        out = subprocess.run([str(devcheck.DEV_PY), "-I", "-c", code], capture_output=True, text=True, timeout=120).stdout
+        _VOCAB = {w.lower() for w in out.split()}
+    return _VOCAB
+
+
+def skeleton(sql: str) -> str:
+    """Query shape with literals, identifiers and aliases removed (random alias names must not look like new templates)."""
+    t = re.sub(r"'(?:[^']|'')*'", "S", sql.lower())
+    t = re.sub(r"\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b", "N", t)
+    vocab = sql_vocab()
+    t = re.sub(r"\b[a-z_][a-z0-9_]*\b", lambda m: m.group(0) if m.group(0) in vocab or m.group(0) in ("s", "n") else "i", t)
+    t = re.sub(r"\b(?:i\s*\.\s*)+i\b", "i", t)                 # a.b.c -> i
+    t = re.sub(r"\bi(\s*,\s*i)+\b", "i", t)                      # column lists of different lengths -> i
+    return re.sub(r"\s+", " ", t).strip()
+
+
 ALLOWED_IMPORTS = {"random", "itertools", "string", "math", "textwrap", "functools", "collections"}
 BANNED_NAMES = {"open", "exec", "eval", "compile", "__import__", "input", "globals", "locals", "vars", "getattr", "setattr", "delattr",
                 "breakpoint", "exit", "quit", "help", "memoryview", "type", "super", "classmethod", "staticmethod", "property"}
@@ -321,7 +347,8 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
         for info in r["queries"]:
             nq += 1
             sql = case["queries"][info["i"]]["sql"]
-            templates.add(re.sub(r"\s+", " ", re.sub(r"\b\d+(\.\d+)?\b", "N", re.sub(r"'[^']*'", "S", sql.lower()))))
+            if info["status"] == "ok":
+                templates.add(skeleton(sql))
             if info["status"] == "ok":
                 nvalid += 1
                 if info["sig"]:
@@ -353,20 +380,21 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
         uniq.setdefault((h["kind"], h["config"], re.sub(r"\d+", "N", h["detail"])[:80]), h)
     (out_dir / "hits.jsonl").write_text("".join(json.dumps(h) + "\n" for h in uniq.values()))
     shapes = len(sigs)
-    flags = []
-    need_t = max(30, int(0.05 * nq))
-    need_s = max(15, int(0.02 * nvalid))
+    flags, warns = [], []
+    need_t = max(30, int(0.02 * nvalid))                         # distinct SHAPES of valid queries (identifiers/literals removed)
+    need_s = max(15, int(0.03 * len(results)))                   # ~30 plan shapes per 1000 cases
     if len(templates) < need_t:
-        flags.append(f"only {len(templates)} distinct query templates (literals stripped) for {nq} queries (need >= {need_t})")
+        flags.append(f"only {len(templates)} distinct valid-query skeletons for {nvalid} valid queries (need >= {need_t})")
     if sw and nvalid >= 100 and shapes < need_s:
-        flags.append(f"only {shapes} distinct plan shapes for {nvalid} valid queries (need >= {need_s})")
+        flags.append(f"only {shapes} distinct plan shapes for {len(results)} cases (need >= {need_s})")
     if len(per_case) == 1 and nq >= 200:
-        flags.append(f"every case has exactly {next(iter(per_case))} queries (no structural randomness)")
-    if nq and nvalid == nq and len(templates) < max(60, int(0.1 * nq)):
-        flags.append("100% valid with few templates: queries are trivially valid")
+        warns.append(f"every case has exactly {next(iter(per_case))} queries (fine only if the queries themselves vary structurally)")
+    if nq and nvalid == nq:
+        warns.append("100% of queries are valid: a real generator hits some binder errors on unusual shapes")
     quality = "LOW DIVERSITY - NOT A REAL TEST" if flags else "ok"
     metrics = {
-        "quality": quality, "quality_flags": flags, "distinct_templates": len(templates),
+        "quality": quality, "quality_flags": flags, "quality_warnings": warns, "distinct_templates": len(templates),
+        "author_model": meta.get("author_model"),
         "queries_per_case": dict(sorted(per_case.items())),
         "generator": str(path), "name": name, "target": target, "n_cases": n, "generator_errors": dict(gen_errors),
         "cases_run": len(results), "setup_ok": sum(1 for r in results if r.get("valid_setup")),
@@ -387,7 +415,8 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
 def feedback_text(m: dict) -> str:
     """What the next LLM round gets: measured by the engine, never by the model."""
     L = [f"# Feedback for generator `{m['name']}` (engine-measured, seed {m['seed']}, DuckDB {m['devcheck']})", "",
-         f"**Quality: {m['quality']}**" + ("".join(f"\n* {f}" for f in m["quality_flags"]) if m["quality_flags"] else ""),
+         f"**Quality: {m['quality']}**" + ("".join(f"\n* {f}" for f in m["quality_flags"]) if m["quality_flags"] else "")
+         + ("".join(f"\n* (warning) {w}" for w in m.get("quality_warnings", []))),
          f"* distinct query templates: {m['distinct_templates']}; queries per case: {m['queries_per_case']}", ""
          f"* cases generated {m['n_cases']}, ran {m['cases_run']}, setup valid {m['setup_ok']}",
          f"* queries {m['queries']}, valid {m['valid_queries']} (**valid rate {m['valid_rate']:.1%}**)"]
