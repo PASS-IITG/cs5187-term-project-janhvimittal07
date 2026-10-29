@@ -1,0 +1,4 @@
+DuckDB 2.0.0: 10000 join cases
+... plain pass done 294s
+... verify pass done 593s
+done in 593s: 0 unique signatures

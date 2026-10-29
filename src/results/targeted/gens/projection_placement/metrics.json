@@ -1,0 +1,53 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 839,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "25585af2cc1c72baed1533264a35e417833e25970bbb14b92a1c3868859c5ad7",
+ "target_key": "{\"optimizer\": \"projection_placement\"}",
+ "comparable_rate": 0.935,
+ "reach_tree_rate": 0.536,
+ "queries_per_case": {
+  "1": 1530,
+  "2": 1520
+ },
+ "generator": "/home/cse/cs5187/generators/projection_placement.py",
+ "name": "projection_placement",
+ "target": {
+  "optimizer": "projection_placement"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 4570,
+ "valid_queries": 4570,
+ "valid_rate": 1.0,
+ "reach_queries": 2449,
+ "reach_rate": 0.536,
+ "distinct_plan_signatures": 139,
+ "hits_total": 210,
+ "hits_unique": 129,
+ "hit_kinds": {
+  "config_diff": 129
+ },
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT s.*, rank() OVER (ORDER BY f_val) FROM (SELECT d.s, f.f_val, f.id FROM (SELECT i, substring(v, 2, 12) AS s FROM placement_dim) d INNER JOIN placement_fact f USING (i) WHERE f.f_val > 4) s ORDER BY ALL",
+   "SELECT DISTINCT * FROM (SELECT d.s, f.f_val, row_number() OVER (PARTITION BY d.i ORDER BY f.f_val) AS rn FROM (SELECT i, substring_grapheme(v, 1, 11) AS s FROM placement_dim) d LEFT JOIN placement_fact f USING (i) WHERE f.f_val > 1) s ORDER BY ALL"
+  ],
+  "miss": [
+   "SELECT s, count(*) FROM (SELECT d.s, f.f_val FROM (SELECT i, substring(v, -9, 10) AS s FROM placement_dim) d LEFT JOIN placement_fact f USING (i) WHERE EXISTS (SELECT 1 FROM placement_dim2 d2 WHERE d2.i = d.i)) sub GROUP BY s",
+   "SELECT s, count(*) FROM (SELECT f.f_val, d.s FROM placement_fact f LEFT JOIN (SELECT i, substring(v, 1, 13) AS s FROM placement_dim) d USING (i) WHERE f.f_val > 0) sub GROUP BY s"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-29 18:31:52",
+ "devcheck": "2.0.0"
+}

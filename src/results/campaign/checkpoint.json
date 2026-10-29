@@ -1,0 +1,50 @@
+{
+  "campaign_id": "camp_1792681911_hybrid_asan",
+  "build": "asan",
+  "mode": "hybrid",
+  "seed": 42,
+  "target_seconds": 43200.0,
+  "elapsed_seconds": 43207.635892152786,
+  "start_timestamp": 1792681911.9891074,
+  "last_checkpoint_timestamp": 1792725119.6252208,
+  "last_triage_timestamp": 1792681911.989108,
+  "status": "completed",
+  "total_queries": 66110,
+  "total_ok": 8286,
+  "total_errors": 57737,
+  "total_crashes": 87,
+  "unique_crashes": 0,
+  "seen_signatures": [],
+  "pending_triage": [],
+  "triaged_finding_ids": [],
+  "generator_stats": {
+    "sqlsmith": {
+      "queries": 26100,
+      "ok": 0,
+      "errors": 26047,
+      "crashes": 53,
+      "elapsed_seconds": 24653.76375079156
+    },
+    "mutation": {
+      "queries": 24620,
+      "ok": 8286,
+      "errors": 16300,
+      "crashes": 34,
+      "elapsed_seconds": 4523.803197383761
+    },
+    "metamorphic": {
+      "queries": 15390,
+      "ok": 0,
+      "errors": 15390,
+      "crashes": 0,
+      "elapsed_seconds": 14025.787616968157
+    },
+    "seeds": {
+      "queries": 0,
+      "ok": 0,
+      "errors": 0,
+      "crashes": 0,
+      "elapsed_seconds": 0.0
+    }
+  }
+}

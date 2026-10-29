@@ -1,0 +1,5 @@
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "plain", "sql": null}
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "verify", "sql": null}
+{"id": 1360, "kind": "crash", "detail": "worker died rc=-11  [NOT reproducible alone]", "mode": "verify", "sql": "SELECT lag(bl, 2147483647, 1.5 IGNORE NULLS) OVER (PARTITION BY d, b ORDER BY dc, k), ntile(9223372036854775807) OVER (PARTITION BY d, b ORDER BY f, k), lag(big, 0) OVER (PARTITION BY st ORDER BY l, k) FROM w"}
+{"id": null, "kind": "crash", "detail": "worker died rc=1 See also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads [no case to replay]", "mode": "verify", "sql": null}
+{"id": null, "kind": "crash", "detail": "worker died rc=127 cannot allocate memory for thread-local data: ABORT [no case to replay]", "mode": "verify", "sql": null}

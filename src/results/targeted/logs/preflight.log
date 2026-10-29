@@ -1,0 +1,10 @@
+[PASS] source  /home/cse/.gemini/antigravity/scratch/termproject/src/duckdb is at v2.0.0 (d54cbbe3df)
+[PASS] wheel   duckdb 2.0.0 source_id d54cbbe3df
+[PASS] dev     duckdb 2.0.0 source_id d54cbbe3df
+[PASS] asan    /home/cse/.gemini/antigravity/scratch/termproject/src/build-asan/duckdb is v2.0.0-dev1 d54cbbe3df, core functions work
+[PASS] driver  driver-asan runs core functions
+[PASS] cov     /home/cse/.gemini/antigravity/scratch/termproject/src/build-cov/duckdb is v2.0.0: coverage numbers are valid
+[WARN] newer   gh not installed: check https://github.com/duckdb/duckdb/releases yourself
+[WARN] memory  3161 MB available (<4 GB: use JOBS=2 for builds, one ASan job at a time)
+
+preflight ok: 0 failing, 2 warnings

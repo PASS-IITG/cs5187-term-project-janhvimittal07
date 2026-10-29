@@ -1,0 +1,20 @@
+DuckDB 2.0.0: 7077 distinct queries
+[None] crash      worker died rc=-11  [no case to replay]
+... 400/7077 {'crash': 1} 12s
+... 800/7077 {'crash': 1} 24s
+... 1200/7077 {'crash': 1} 35s
+... 1600/7077 {'crash': 1} 47s
+... 2000/7077 {'crash': 1} 59s
+... 2400/7077 {'crash': 1} 71s
+... 2800/7077 {'crash': 1} 83s
+... 3200/7077 {'crash': 1} 94s
+... 3600/7077 {'crash': 1} 106s
+... 4000/7077 {'crash': 1} 118s
+... 4400/7077 {'crash': 1} 130s
+... 4800/7077 {'crash': 1} 141s
+... 5200/7077 {'crash': 1} 153s
+... 5600/7077 {'crash': 1} 165s
+... 6000/7077 {'crash': 1} 177s
+... 6400/7077 {'crash': 1} 189s
+... 6800/7077 {'crash': 1} 200s
+done in 208s: 1 unique signatures

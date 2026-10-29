@@ -1,0 +1,53 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 41,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "25585af2cc1c72baed1533264a35e417833e25970bbb14b92a1c3868859c5ad7",
+ "target_key": "{\"optimizer\": \"projection_placement\"}",
+ "comparable_rate": 0.952,
+ "reach_tree_rate": 0.571,
+ "queries_per_case": {
+  "1": 18,
+  "2": 12
+ },
+ "generator": "/home/cse/cs5187/generators/projection_placement.py",
+ "name": "projection_placement",
+ "target": {
+  "optimizer": "projection_placement"
+ },
+ "n_cases": 30,
+ "generator_errors": {},
+ "cases_run": 30,
+ "setup_ok": 30,
+ "queries": 42,
+ "valid_queries": 42,
+ "valid_rate": 1.0,
+ "reach_queries": 24,
+ "reach_rate": 0.571,
+ "distinct_plan_signatures": 35,
+ "hits_total": 2,
+ "hits_unique": 2,
+ "hit_kinds": {
+  "config_diff": 2
+ },
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT s, f_val, count(*) FROM (SELECT d.s, f.f_val, row_number() OVER (PARTITION BY d.i ORDER BY f.f_val) AS rn FROM (SELECT i, substring(v, -3, 14) AS s FROM placement_dim) d JOIN placement_fact f USING (i) WHERE f.f_val > 4) sub GROUP BY s, f_val HAVING count(*) > 1 ORDER BY ALL",
+   "WITH q AS (SELECT d.s, f.f_val, f.id FROM (SELECT i, substring(v, -4, 14) AS s FROM placement_dim) d INNER JOIN placement_fact f USING (i) WHERE f.f_val > 4) SELECT * FROM q WHERE 1=1 ORDER BY ALL"
+  ],
+  "miss": [
+   "SELECT 1 FROM (SELECT d.s, f.f_val, d2.tag FROM (SELECT i, substring(v, -7, 16) AS s FROM placement_dim) d INNER JOIN placement_fact f USING (i) JOIN placement_dim2 d2 USING (i) WHERE f.f_val > 1) s QUALIFY row_number() OVER () > 0",
+   "SELECT s, f_val, count(*) FROM (SELECT d.s, f.f_val FROM (SELECT i, substring(v, -4, 18) AS s FROM placement_dim) d INNER JOIN placement_fact f USING (i) WHERE EXISTS (SELECT 1 FROM placement_dim2 d2 WHERE d2.i = d.i)) sub GROUP BY s, f_val HAVING count(*) > 1 ORDER BY ALL"
+  ]
+ },
+ "has_switch": true,
+ "seed": 1,
+ "finished": "2026-10-29 18:26:20",
+ "devcheck": "2.0.0"
+}

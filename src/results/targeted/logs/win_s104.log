@@ -1,0 +1,9 @@
+DuckDB 2.0.0: 7863 distinct window queries
+[plain None] crash      worker died rc=-11  [no case to replay]
+[plain 280] crash      worker died rc=-11  [NOT reproducible alone]
+[plain None] crash      worker died rc=1 See also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads [no case to replay]
+... plain pass done 230s
+[verify None] crash      worker died rc=-11  [no case to replay]
+[verify 6600] crash      worker died rc=-11  [NOT reproducible alone]
+... verify pass done 463s
+done in 463s: 5 unique signatures

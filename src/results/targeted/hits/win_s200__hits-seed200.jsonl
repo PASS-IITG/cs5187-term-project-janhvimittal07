@@ -1,0 +1,4 @@
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "plain", "sql": null}
+{"id": 1840, "kind": "crash", "detail": "worker died rc=-11  [NOT reproducible alone]", "mode": "plain", "sql": "SELECT string_agg(i, ',') OVER (PARTITION BY b ORDER BY l, k), lead(l, NULL, 9223372036854775807) OVER (PARTITION BY i), percent_rank() OVER (PARTITION BY i ORDER BY d, k) FROM w /*POSITIONAL*/"}
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "verify", "sql": null}
+{"id": 563, "kind": "crash", "detail": "worker died rc=-11  [NOT reproducible alone]", "mode": "verify", "sql": "SELECT histogram(j) OVER (PARTITION BY st ORDER BY i, k), ntile(2147483647) OVER (PARTITION BY l) FROM w /*POSITIONAL*/"}

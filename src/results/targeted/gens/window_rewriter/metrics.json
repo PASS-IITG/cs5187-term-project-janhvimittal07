@@ -1,0 +1,51 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 288,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "e9bc196021ba8a11454ebd6cf154429dbb2f8b5506dc9f7279e1fb70ddb70ed8",
+ "target_key": "{\"optimizer\": \"window_rewriter\"}",
+ "comparable_rate": 1.0,
+ "reach_tree_rate": 0.903,
+ "queries_per_case": {
+  "1": 1501,
+  "2": 1549
+ },
+ "generator": "/home/cse/cs5187/generators/window_rewriter.py",
+ "name": "window_rewriter",
+ "target": {
+  "optimizer": "window_rewriter"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 4599,
+ "valid_queries": 4599,
+ "valid_rate": 1.0,
+ "reach_queries": 4151,
+ "reach_rate": 0.903,
+ "distinct_plan_signatures": 96,
+ "hits_total": 0,
+ "hits_unique": 0,
+ "hit_kinds": {},
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "WITH cte AS (SELECT row_number() OVER () AS rn, a, b, c, d FROM t2) SELECT w.rn, w.d || '_tag' FROM cte w WHERE w.c < 7 ORDER BY ALL",
+   "SELECT * FROM (SELECT w.rn, w.a + w.b AS sum_ab FROM (SELECT row_number() OVER () AS rn, a, b, c, d FROM t3) w LIMIT 10) s1 UNION ALL SELECT * FROM (SELECT w.rn, w.a + w.b AS sum_ab FROM (SELECT row_number() OVER () AS rn, a, b, c, d FROM t3) w LIMIT 10) s2 ORDER BY ALL"
+  ],
+  "miss": [
+   "SELECT w.c, count(*), sum(w.rn) FROM (SELECT row_number() OVER () AS rn, a, b, c, d FROM t2) w WHERE w.c IN (4, 5, 6) GROUP BY w.c HAVING count(*) > 0 ORDER BY ALL",
+   "SELECT sum(x) FROM (SELECT count(*) AS x FROM (SELECT row_number() OVER () AS rn, a, b, c, d FROM t2) w WHERE w.a = 4) sub"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-28 17:00:12",
+ "devcheck": "2.0.0"
+}

@@ -1,0 +1,53 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 288,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "6b66d178b73f5a15f71006bf9b5c2238354b6734bca70fc9f26aa86834094d17",
+ "target_key": "{\"optimizer\": \"late_materialization\"}",
+ "comparable_rate": 1.0,
+ "reach_tree_rate": 0.493,
+ "queries_per_case": {
+  "2": 1540,
+  "3": 1510
+ },
+ "generator": "/home/cse/cs5187/generators/late_materialization.py",
+ "name": "late_materialization",
+ "target": {
+  "optimizer": "late_materialization"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 7610,
+ "valid_queries": 7610,
+ "valid_rate": 1.0,
+ "reach_queries": 3750,
+ "reach_rate": 0.493,
+ "distinct_plan_signatures": 189,
+ "hits_total": 255,
+ "hits_unique": 2,
+ "hit_kinds": {
+  "config_diff": 2
+ },
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT * FROM (SELECT payload, id FROM wide_tbl WHERE id >= 20 ORDER BY grp ASC LIMIT 9) s1 UNION ALL SELECT * FROM (SELECT payload, id FROM wide_tbl WHERE id >= 20 ORDER BY grp ASC LIMIT 9) s2 ORDER BY ALL",
+   "SELECT * FROM (SELECT id, payload, note FROM wide_tbl WHERE grp < 13 ORDER BY grp ASC LIMIT 22) s1 UNION ALL SELECT * FROM (SELECT id, payload, note FROM wide_tbl WHERE grp < 13 ORDER BY grp ASC LIMIT 22) s2 ORDER BY ALL"
+  ],
+  "miss": [
+   "SELECT count(*), max(1) FROM (SELECT payload FROM wide_tbl WHERE grp <= 20 ORDER BY v ASC LIMIT 7) sub",
+   "SELECT count(*), max(1) FROM (SELECT w.id, w.payload, r.label FROM wide_tbl w LEFT JOIN ref_tbl r USING (id) WHERE w.id < 25 ORDER BY w.grp DESC LIMIT 22) sub"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-27 17:50:10",
+ "devcheck": "2.0.0"
+}

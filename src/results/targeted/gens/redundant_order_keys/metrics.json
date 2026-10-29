@@ -1,0 +1,52 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes",
+  "most reaching queries change only expressions, not operators (fine for expression-level optimizers, check the examples)"
+ ],
+ "distinct_templates": 779,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "5544c4290eadcd19d05aa26a35969fb17a81a723aa9a2d5e3170e22383f7bf3d",
+ "target_key": "{\"optimizer\": \"redundant_order_keys\"}",
+ "comparable_rate": 1.0,
+ "reach_tree_rate": 0.117,
+ "queries_per_case": {
+  "1": 1545,
+  "2": 1505
+ },
+ "generator": "/home/cse/cs5187/generators/redundant_order_keys.py",
+ "name": "redundant_order_keys",
+ "target": {
+  "optimizer": "redundant_order_keys"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 4555,
+ "valid_queries": 4555,
+ "valid_rate": 1.0,
+ "reach_queries": 3647,
+ "reach_rate": 0.801,
+ "distinct_plan_signatures": 92,
+ "hits_total": 0,
+ "hits_unique": 0,
+ "hit_kinds": {},
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT s.*, rank() OVER (ORDER BY 1) FROM (SELECT id, payload FROM t ORDER BY id ASC, extra ASC) s",
+   "SELECT count(*), max(1) FROM (SELECT p, s, val FROM comp ORDER BY p DESC, s DESC, val DESC) sub"
+  ],
+  "miss": [
+   "WITH q AS (SELECT t.id, t.payload, c.val FROM t JOIN comp c ON t.id = c.p ORDER BY t.id, t.payload ASC) SELECT q.*, t2.score FROM q LEFT JOIN t2 ON 1=1 WHERE t2.id = 1",
+   "SELECT DISTINCT * FROM (SELECT t.id, t.payload, c.val FROM t JOIN comp c ON t.id = c.p ORDER BY t.id, t.payload ASC) s"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-28 16:16:53",
+ "devcheck": "2.0.0"
+}

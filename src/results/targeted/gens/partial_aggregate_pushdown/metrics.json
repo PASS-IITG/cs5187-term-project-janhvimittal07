@@ -1,0 +1,51 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 6064,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "6f3c306334e6ddca0013d9deff455bb53b67e3085be13e3b2f790ac64ab5a904",
+ "target_key": "{\"optimizer\": \"partial_aggregate_pushdown\"}",
+ "comparable_rate": 1.0,
+ "reach_tree_rate": 0.579,
+ "queries_per_case": {
+  "2": 1530,
+  "3": 1520
+ },
+ "generator": "/home/cse/cs5187/generators/partial_aggregate_pushdown.py",
+ "name": "partial_aggregate_pushdown",
+ "target": {
+  "optimizer": "partial_aggregate_pushdown"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 7620,
+ "valid_queries": 7620,
+ "valid_rate": 1.0,
+ "reach_queries": 4409,
+ "reach_rate": 0.579,
+ "distinct_plan_signatures": 152,
+ "hits_total": 0,
+ "hits_unique": 0,
+ "hit_kinds": {},
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT * FROM (SELECT d.grp, sum(f.v), avg(f2.v) FROM fact f JOIN dim d ON f.k = d.k JOIN fact2 f2 ON f.k = f2.k WHERE f.v > 13 GROUP BY d.grp) s WHERE 1=1 ORDER BY ALL",
+   "SELECT * FROM (SELECT d.grp, avg(f.v), min(f2.v) FROM fact f LEFT JOIN dim d ON f.k = d.k JOIN fact2 f2 ON f.k = f2.k WHERE f.v > 26 GROUP BY d.grp HAVING max(f2.v) > 82) s1 UNION ALL SELECT * FROM (SELECT d.grp, avg(f.v), min(f2.v) FROM fact f LEFT JOIN dim d ON f.k = d.k JOIN fact2 f2 ON f.k = f2."
+  ],
+  "miss": [
+   "SELECT 1, count(*) FROM (SELECT d.k, min(f.v), sum(f2.v) FROM fact f LEFT JOIN dim d ON f.k = d.k LEFT JOIN fact2 f2 ON f.k = f2.k WHERE d.grp = 1 GROUP BY d.k HAVING sum(f.v) > 82) s GROUP BY 1 ORDER BY ALL",
+   "WITH cte AS (SELECT d.k, sum(f.v), count(*) FROM fact f JOIN dim d ON f.k = d.k LEFT JOIN fact2 f2 ON f.k = f2.k WHERE f.v BETWEEN 10 AND 76 GROUP BY d.k) SELECT * FROM cte WHERE 1=1 ORDER BY ALL LIMIT 42"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-27 17:50:41",
+ "devcheck": "2.0.0"
+}

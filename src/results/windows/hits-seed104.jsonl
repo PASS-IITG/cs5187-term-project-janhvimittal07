@@ -1,0 +1,5 @@
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "plain", "sql": null}
+{"id": 280, "kind": "crash", "detail": "worker died rc=-11  [NOT reproducible alone]", "mode": "plain", "sql": "SELECT rank() OVER (PARTITION BY b), nth_value(tiny, 2 ) OVER (PARTITION BY s), fill(ts) OVER (PARTITION BY st ORDER BY l, k) FROM w /*POSITIONAL*/"}
+{"id": null, "kind": "crash", "detail": "worker died rc=1 See also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads [no case to replay]", "mode": "plain", "sql": null}
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "verify", "sql": null}
+{"id": 6600, "kind": "crash", "detail": "worker died rc=-11  [NOT reproducible alone]", "mode": "verify", "sql": "SELECT lag(h, 0, ''::BLOB RESPECT NULLS) OVER (PARTITION BY i ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE TIES), fill(big) OVER (PARTITION BY st ORDER BY i, k), median(b) OVER (PARTITION BY st ORDER BY ts, k) FROM w /*POSITIONAL*/"}

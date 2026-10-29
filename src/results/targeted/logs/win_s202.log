@@ -1,0 +1,7 @@
+DuckDB 2.0.0: 7884 distinct window queries
+[plain None] crash      worker died rc=-11  [no case to replay]
+... plain pass done 237s
+[verify None] crash      worker died rc=-11  [no case to replay]
+[verify 7840] crash      worker died rc=-11  [NOT reproducible alone]
+... verify pass done 472s
+done in 472s: 3 unique signatures
