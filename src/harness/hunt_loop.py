@@ -121,7 +121,7 @@ def call_llm(prompt: str, cwd: Path, model: str, timeout: int, cmd_override: str
            "--add-dir", str(WORK / "duckdb")]
     p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
     if p.returncode != 0:
-        raise RuntimeError(f"claude exited {p.returncode}: {p.stderr.strip()[-300:]}")
+        raise RuntimeError(f"claude exited {p.returncode}: stderr={p.stderr.strip()[-300:]!r} stdout={p.stdout.strip()[-300:]!r}")
     return p.stdout
 
 
@@ -146,6 +146,7 @@ class Hunt:
         self.t0 = time.time()
         self.llm_failures = 0
         self.stop = False
+        self.model_now = a.model
 
     def save(self) -> None:
         self.ledger_path.write_text(json.dumps(self.ledger, indent=1))
@@ -164,14 +165,16 @@ class Hunt:
         return cards
 
     def next_target(self) -> dict | None:
-        for c in self.cards():
-            st = self.ledger["targets"].get(c["name"], {})
-            if st.get("status") not in ("retired",):
-                return c
+        cards = self.cards()
+        for wanted in ("active", "deferred"):              # targets whose LLM calls kept failing come back last
+            for c in cards:
+                st = self.ledger["targets"].get(c["name"], {})
+                if st.get("status", "active") == wanted:
+                    return c
         return None
 
     def prompt(self, card: dict, name: str, feedback: str) -> str:
-        p = METHOD.format(edge_keys=", ".join(sorted(gen_runner_edges())), name=name, model=f"claude-{self.a.model}",
+        p = METHOD.format(edge_keys=", ".join(sorted(gen_runner_edges())), name=name, model=f"claude-{self.model_now}",
                           target=json.dumps(card["target"]), known=known_list())
         p += "\n\n## Target card\n\n" + (rule_targets.OUT / f"{card['name']}.md").read_text()
         p += ("\n\nExample generators (structure only, they target other features): " +
@@ -187,7 +190,7 @@ class Hunt:
         self.ledger["llm_calls"] += 1
         self.save()
         try:
-            resp = call_llm(prompt, self.cwd, self.a.model, self.a.llm_timeout, self.a.llm_cmd)
+            resp = call_llm(prompt, self.cwd, self.model_now, self.a.llm_timeout, self.a.llm_cmd)
         except Exception as e:                                # noqa: BLE001 - usage limit, network, timeout, sleep
             log(self.dir, f"{name}: LLM call failed: {str(e)[:200]}")
             self.ledger["llm_calls"] -= 1                     # a failed call is not a used call
@@ -280,6 +283,17 @@ class Hunt:
                 if m and m.get("llm_failed"):
                     # usage limit / network / sleep: do NOT count the round or retire the target; back off, then stop cleanly
                     self.llm_failures += 1
+                    st["llm_failures"] = st.get("llm_failures", 0) + 1
+                    if self.a.fallback_model and self.model_now != self.a.fallback_model and self.llm_failures >= 2:
+                        log(self.dir, f"switching the generator author from {self.model_now} to the fallback {self.a.fallback_model} "
+                                      f"(primary model failed {self.llm_failures} times in a row)")
+                        self.model_now = self.a.fallback_model
+                    if st["llm_failures"] >= 3 and st.get("status") != "deferred":
+                        st["status"] = "deferred"
+                        st["llm_failures"] = 0
+                        log(self.dir, f"{card['name']}: deferred (its LLM calls keep failing); moving to the next target")
+                        self.save()
+                        break
                     if self.llm_failures >= self.a.max_llm_failures:
                         log(self.dir, f"LLM unavailable {self.llm_failures} times in a row (usage limit?): stopping. Nothing is lost; "
                                       f"resume later with the same --run {self.a.run}")
@@ -290,6 +304,9 @@ class Hunt:
                     time.sleep(wait)
                     continue
                 self.llm_failures = 0
+                st["llm_failures"] = 0
+                if st.get("status") == "deferred":
+                    st["status"] = "active"
                 st["rounds"] = k
                 try:
                     triaged = self.triage(name, m, card) if m and m.get("ok") else []
@@ -343,6 +360,7 @@ def main() -> None:
     ap.add_argument("--llm-cmd", default="", help="replace the claude call with a command reading the prompt on stdin (tests)")
     ap.add_argument("--min-free-gb", type=float, default=1.5)
     ap.add_argument("--llm-backoff-s", type=int, default=300)
+    ap.add_argument("--fallback-model", default="sonnet", help="author model after 2 consecutive failures of --model ('' = none)")
     ap.add_argument("--max-llm-failures", type=int, default=4, help="consecutive failed LLM calls (usage limit, network) before stopping cleanly")
     ap.add_argument("--max-triage", type=int, default=10)
     ap.add_argument("--no-search", action="store_true")
