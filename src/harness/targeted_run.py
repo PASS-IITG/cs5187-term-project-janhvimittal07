@@ -192,8 +192,51 @@ class Run:
             seed += 1
         self.log("fill", 0, 0, f"filled idle time with seeds up to {seed - 1}; {self.left() / 3600:.1f} h left before the report reserve")
 
+    def run_gens_mode(self) -> None:
+        """All the time goes to the frozen LLM-written generators (never edited: their metrics are tied to the file hash), on fresh seeds.
+        Every full pass over the generators is followed by an ASan+UBSan replay of the cases dumped on the same seeds, because the
+        generator workers use the plain wheel and would never see a memory error."""
+        a = self.a
+        gens = []
+        for f in sorted((WORK / "generators").glob("*.py")):
+            mf = OUT / "gens" / f.stem / "metrics.json"
+            if mf.exists() and json.loads(mf.read_text()).get("quality") == "ok":
+                gens.append(f)
+        if not gens:
+            self.log("gens", 1, 0, "no quality-ok generators found in $FUZZ_WORK/generators")
+            return
+        n, rnd = (40, 0) if a.smoke else (a.gen_cases, 0)
+        (OUT / "gens-run").mkdir(exist_ok=True)
+        dump_root = WORK / "corpus" / "llm" / "gens-run"
+        while self.left() > (a.reserve_min + 20) * 60:
+            dumps = []
+            for i, g in enumerate(gens):
+                if self.left() < (a.reserve_min + 20) * 60:
+                    break
+                seed = a.gen_seed_base + rnd * 100 + i
+                od = OUT / "gens-run" / f"{g.stem}-s{seed}"
+                if not self.unit(f"gen_{g.stem}_s{seed}", [PY, str(HERE / "gen_runner.py"), "run", str(g), "--n", str(n), "--seed", str(seed), "--out", str(od)],
+                                 2400, [od / "hits.jsonl"]):
+                    return
+                dd = dump_root / f"r{rnd}"                      # flat: asan_replay --sql-dir does not recurse; file names carry generator and seed
+                self.unit(f"gendump_{g.stem}_s{seed}", [PY, str(HERE / "gen_runner.py"), "dump", str(g), "--n", "40" if a.smoke else "150", "--seed", str(seed), "--out", str(dd)], 600)
+                dumps.append(dd)
+                if a.smoke and i >= 1:
+                    break
+            if self.left() > (a.reserve_min + 20) * 60:
+                self.unit(f"asan_gens_r{rnd}", [PY, str(HERE / "asan_replay.py"), "--sql-dir", str(dump_root / f"r{rnd}"), "--out", str(OUT / f"asan-gens-r{rnd}")]
+                          + (["--limit", "40"] if a.smoke else []), max(600.0, self.left() - a.reserve_min * 60 - 300), [OUT / f"asan-gens-r{rnd}" / "hits.jsonl"])
+            rnd += 1
+            if a.smoke:
+                break
+        self.log("gens", 0, 0, f"{rnd} passes over {len(gens)} generators, {self.left() / 3600:.1f} h left before the report reserve")
+
     def run_all(self) -> None:
         a = self.a
+        if a.gens:
+            self.run_gens_mode()
+            self.report()
+            return
         s = a.smoke
         # fractions of the usable time per phase (cumulative end points)
         trig_n, bu_n, join_n = (60, 150, 80) if s else (3000, 8000, 10000)
@@ -289,6 +332,14 @@ class Run:
         dossiers = [f.stem for f in (OUT / "dossiers").glob("*.md")] if (OUT / "dossiers").exists() else []
         worked = [d for d in dossiers if re.search(re.escape(d) + r".{0,300}?(sibling|no sibling|already fixed|not vulnerable|negative|checked|result|verdict|reproduce)", notes, re.S | re.I)]
         chk(len(worked) >= self.a.min_dossiers, f"fix dossiers worked: {len(worked)} named in the notes (need {self.a.min_dossiers}; {len(dossiers)} exist)")
+        rows = [l.split("|") for l in (OUT / "RUN_LOG.md").read_text().splitlines() if l.startswith("| 20")] if (OUT / "RUN_LOG.md").exists() else []
+        rows = [(r[2].strip(), float(r[4])) for r in rows if len(r) > 5 and r[4].strip().replace(".", "").isdigit()]
+        first = next((i for i, (u, _) in enumerate(rows) if u.startswith("gen_")), None)
+        work = [(u, sec) for u, sec in (rows[first:] if first is not None else rows) if not u.startswith(("preflight", "report", "fill"))]
+        llm_s, all_s = sum(sec for u, sec in work if u.startswith(("gen_", "gendump_", "asan_gens"))), sum(sec for _, sec in work)
+        chk(first is not None and all_s > 0 and llm_s / all_s >= 0.6,
+            f"LLM-directed share: {llm_s / 3600:.2f} h of {all_s / 3600:.2f} h unit time since the first gen_ unit went to the LLM generators "
+            f"({'no gen_ unit in the log: run with --gens' if first is None else f'{100 * llm_s / max(all_s, 1):.0f}%'}; need >= 60%)")
         covs = {f.parent.name: json.loads(f.read_text()) for f in (WORK / "results").glob("cov-A*/changed.json")}
         ids = {v.get("build_source_id") for v in covs.values()}
         same = "cov-A1" in covs and "cov-A4" in covs and (covs["cov-A1"].get("covered"), covs["cov-A1"].get("by_subsystem")) == (covs["cov-A4"].get("covered"), covs["cov-A4"].get("by_subsystem"))
@@ -335,6 +386,10 @@ class Run:
                         ";\n".join(fuzz_windows.SETUP) + ";\n" + o["sql"] + ";\n", review)
                 elif unit.startswith("join") and o.get("setup"):
                     add(unit, f"case{o['id']}", kind, det, ";\n".join(o["setup"]) + ";\n" + str(o.get(o.get("variant"), o.get("q"))) + ";\n", review)
+                elif unit.startswith("gen_") and o.get("script"):
+                    # hits of the LLM-written generators (gen_runner): internal errors are verified automatically, differences need a human
+                    add(unit, f"{o.get('gen', '')}:{o.get('id', '')}", kind, f"[{o.get('config', '')}] {det}", str(o["script"]),
+                        kind in ("config_diff", "error_diff", "timeout", "self_check"))
                 elif unit.startswith("asan") and o.get("sql"):
                     if o.get("verdict", "").startswith("reproduces"):
                         add(unit, o["id"], kind, det, o["sql"], False)
@@ -399,6 +454,33 @@ class Run:
                 unsearched.append(v)           # no error text / usable stack frames: it could be known, so it is NOT "new"
             else:
                 new.append(v)
+        # wrong results of the generators (config_diff): no error text, so they get their own verification path
+        # (verify_finding.verify_diff) instead of landing unverified in "needs human review"
+        import gen_runner
+        wr_groups: dict[str, list[dict]] = defaultdict(list)
+        for c in review:
+            if c["kind"] in ("config_diff", "error_diff") and c["tool"].startswith("gen_"):
+                alt, _, q = verify_finding.split_diff_script(c["script"])
+                wr_groups[f"{c['id'].split(':')[0]}|{' ; '.join(alt)}|{gen_runner.skeleton(q)}"].append(c)
+        wr: dict[str, list[dict]] = defaultdict(list)
+        wr_done = set()
+        for i, (key, items) in enumerate(sorted(wr_groups.items())[: self.a.max_verify]):
+            c = items[0]
+            f = cdir / f"wrong{i:03d}.sql"
+            f.write_text(c["script"])
+            try:
+                v = verify_finding.verify_diff(c["script"], str(dev) if dev.exists() else "")
+            except Exception as e:                                   # noqa: BLE001
+                v = {"verdict": "verify_error", "signature": str(e)[:100], "registry": []}
+            v.update(file=str(f), tool=c["tool"], id=c["id"], count=len(items))
+            reg = v.get("registry") or []
+            cls = ("artifact" if v["verdict"] not in ("wrong_result", "error_diff") else
+                   "rediscovered" if any(r["relation"] == "rediscovery" for r in reg) else
+                   "sibling" if reg else "fixed" if v.get("fixed_in_dev") else "new")
+            wr[cls].append(v)
+            wr_done.update(x["id"] for x in items)
+            print(f"[verify-diff {i}] {v['verdict']:16} {cls:12} x{len(items):<3} {c['tool']:14} {v.get('signature', '')[:60]}", flush=True)
+        review = [c for c in review if c["id"] not in wr_done]
         L = [f"# RUN_REPORT - DuckDB 2.0.0 targeted run - {now()}", "",
              f"Budget {self.a.hours} h{' (SMOKE TEST - not a real run)' if self.a.smoke else ''}; wall time used {(time.time() - self.t0) / 3600:.2f} h.",
              "", "## Version", "", "```", subprocess.run([PY, str(HERE / "preflight.py")], capture_output=True, text=True, env=ENV).stdout.strip(), "```", "",
@@ -412,8 +494,26 @@ class Run:
              f"* reproduces but matches an upstream issue/PR (probably known): {len(known)}",
              f"* reproduces but could NOT be searched upstream (no error text or stack frames): {len(unsearched)}  <- a human must search by hand",
              f"* already fixed in the development snapshot: {len(fixed)}",
-             f"* not reproducible alone / verification error (artifacts): {len(artifact)}", ""]
-        if not new:
+             f"* not reproducible alone / verification error (artifacts): {len(artifact)}",
+             f"* **WRONG-RESULT CANDIDATES (generator result differs between configs, deterministic, reproduces alone, no registry match): {len(wr['new'])}**"
+             "  <- no error text: a human must search upstream by hand",
+             f"* wrong-result siblings of a known issue (same rule/function, different shape - read these): {len(wr['sibling'])}",
+             f"* wrong-result rediscoveries (registry): {len(wr['rediscovered'])}; fixed in the dev snapshot: {len(wr['fixed'])}; "
+             f"nondeterministic / not reproducible: {len(wr['artifact'])}", ""]
+        for title, cls in (("WRONG-RESULT CANDIDATES - reduce, find which side is right, search upstream by hand", "new"),
+                           ("WRONG-RESULT SIBLINGS of a known issue - same function/switch, different shape", "sibling"),
+                           ("Wrong-result rediscoveries (already known; NOT new findings)", "rediscovered"),
+                           ("Wrong results already fixed in the development snapshot", "fixed"),
+                           ("Wrong-result artifacts (nondeterministic or not reproducible alone)", "artifact")):
+            if not wr[cls]:
+                continue
+            L.extend([f"## {title}", ""])
+            for v in wr[cls]:
+                reg = ", ".join(f"#{r['issue']} {r['relation']}" for r in v.get("registry") or []) or "none"
+                L.append(f"* `{v['file']}` ({v['tool']}, x{v['count']}): **{v['verdict']}**, probably wrong side: {v.get('suspect', '?')}; "
+                         f"default {v.get('rows_default')} rows vs {v.get('rows_alt')} rows under `{' ; '.join(v.get('alt') or [])}`; registry: {reg}")
+            L.append("")
+        if not new and not wr["new"]:
             L += ["**No candidate new bug.** This is the expected outcome of most runs. Do not report anything as a bug.", ""]
 
         def table(title: str, items: list[dict], hits: bool = False) -> None:
@@ -470,7 +570,7 @@ class Run:
               "* Nothing here was filed or pushed. Every 'candidate' still needs a human to read the SQL and search upstream.",
               "* Counts are real counts from this run; do not round up in the paper.", ""]
         (OUT / "RUN_REPORT.md").write_text("\n".join(L))
-        self.log("report", 0, 0, f"{len(new)} candidate new, {len(siblings)} siblings, {len(rediscovered)} rediscoveries, {len(known)} known?, {len(unsearched)} unsearched, {len(fixed)} fixed, {len(artifact)} artifacts -> RUN_REPORT.md")
+        self.log("report", 0, 0, f"{len(new)} candidate new, {len(wr['new'])} wrong-result candidates, {len(wr['sibling'])} wrong-result siblings, {len(siblings)} siblings, {len(rediscovered)} rediscoveries, {len(known)} known?, {len(unsearched)} unsearched, {len(fixed)} fixed, {len(artifact)} artifacts -> RUN_REPORT.md")
         print(f"\nDONE. Report: {OUT / 'RUN_REPORT.md'}")
 
 
@@ -485,6 +585,9 @@ def main() -> None:
     ap.add_argument("--max-verify", type=int, default=60)
     ap.add_argument("--min-generators", type=int, default=12)
     ap.add_argument("--min-dossiers", type=int, default=20)
+    ap.add_argument("--gens", action="store_true", help="LLM-directed round: ALL time goes to the frozen LLM-written generators (+ASan replay of their dumps)")
+    ap.add_argument("--gen-cases", type=int, default=800, help="cases per generator unit in --gens mode")
+    ap.add_argument("--gen-seed-base", type=int, default=6000)
     ap.add_argument("--no-fill", action="store_true", help="do not spend idle time on extra seeds")
     ap.add_argument("--audit", action="store_true", help="check the brief's requirements mechanically; only say 'finished' if it prints AUDIT PASSED")
     ap.add_argument("--report-only", action="store_true", help="skip all runs; verify the hits collected so far and write RUN_REPORT.md")

@@ -41,5 +41,63 @@
    "create trigger",
    "merge into"
   ]
+ },
+ {
+  "issue": 27445,
+  "status": "open, labelled reproduced; fix PR 27642 open (verified by us: fixes our reproducer too)",
+  "title": "join elimination !column_bindings.empty() on a correlated aggregate with an empty-input fallback LEFT join",
+  "message_regex": "column_bindings\\.empty\\(\\)|Attempted to access index 0 within vector of size 0"
+ },
+ {
+  "issue": 28527,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-07 (needs triage)",
+  "title": "date_trunc with a sub-day part on a DATE column compared with a constant: DateTruncSimplificationRule casts the bounds to DATE",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "date_trunc\\s*\\(\\s*'(hour|hours|minute|minutes|second|seconds|milliseconds?|microseconds?|ms|us|ns|nanoseconds?)'\\s*,\\s*[a-z_][\\w.]*\\s*\\)",
+   "create table \\w+\\s*\\((?:[^)]*,)?\\s*[a-z_]\\w* date\\s*[,)]"
+  ],
+  "family_regex": "date_trunc\\s*\\(|datetrunc\\s*\\("
+ },
+ {
+  "issue": 28531,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-07 (needs triage)",
+  "title": "CAST(<timestamp col> AS DATE) = <DATE> throws a conversion error when the DATE (or the day after) is outside the TIMESTAMP range (TimeStampComparison)",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "(cast\\s*\\(\\s*[a-z_][\\w.]*\\s+as\\s+date\\s*\\)|\\b[a-z_][\\w.]*::date\\b)",
+   "create table \\w+\\s*\\((?:[^)]*,)?\\s*[a-z_]\\w* timestamp\\s*[,)]",
+   "date\\s*'((29031\\d|2903[2-9]\\d|290[4-9]\\d\\d|29[1-9]\\d{3}|[3-9]\\d{5}|\\d{7,}|290309-(0\\d|1[01])-\\d\\d|290309-12-([01]\\d|2[01]))[^']*\\(bc\\)|(294247-(01-[1-3]\\d|0[2-9]-\\d\\d|1[0-2]-\\d\\d)|29424[89]-|2942[5-9]\\d-|294[3-9]\\d\\d-|29[5-9]\\d{3}-|[3-9]\\d{5}-|\\d{7,}-)[^']*)'"
+  ],
+  "family_regex": "(as\\s+date\\s*\\)|::date)"
+ },
+ {
+  "issue": 28532,
+  "ours": true,
+  "status": "open, filed 2026-11-07 (needs triage)",
+  "title": "TIMESTAMP_MS -> TIMESTAMP_S cast past the largest timestamp: CastExceptionText cannot format TIMESTAMP_MS (INTERNAL, database invalidated); also via an all-infinity TIMESTAMP_MS column whose stats min is finite",
+  "message_regex": "Unrecognized type for ConvertToString INT64",
+  "shape_all": [
+   "timestamp_ms",
+   "timestamp_s"
+  ]
+ },
+ {
+  "issue": 28534,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-07 (needs triage)",
+  "title": "date_trunc(part, <timestamp col>) OP c near the end of the TIMESTAMP range: CreateTruncAdd returns the unevaluable bound date_trunc(part, c + 1 part), spurious conversion error",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "date_trunc\\s*\\(\\s*'(millennium|century|decade|year|quarter|month|week|isoyear|day)s?'\\s*,\\s*[a-z_][\\w.]*\\s*\\)",
+   "create table \\w+\\s*\\((?:[^)]*,)?\\s*[a-z_]\\w* timestamp(tz|_s|_ms|_ns| with time zone)?\\s*[,)]",
+   "'294[2-9]\\d\\d-"
+  ],
+  "family_regex": "date_trunc\\s*\\(|datetrunc\\s*\\("
  }
 ]

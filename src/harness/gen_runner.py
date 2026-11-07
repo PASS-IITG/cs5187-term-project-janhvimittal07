@@ -17,6 +17,8 @@ GENERATOR CONTRACT (a plain python file, pure and deterministic per seed):
     def generate(rng):                 # rng = random.Random(seed); return one test case
         return {"setup": ["CREATE TABLE ...", "INSERT ..."],      # self-contained; no files / network / extensions
                 "queries": ["SELECT ...", {"sql": "SELECT ...", "unordered": True}]}   # str or dict
+    # {"sql": ..., "expect_empty": True} is a self-check: any row it returns (in any config) is reported as a finding,
+    # for oracles the config flip cannot express (e.g. a compressed copy of a table EXCEPT ALL an uncompressed copy)
 
 ALLOWED: imports of random, itertools, string, math, textwrap, functools, collections only; no open/exec/eval/getattr/
 dunder access/global state. Anything else is rejected before a single line runs.
@@ -167,7 +169,8 @@ for seed in req["seeds"]:
         qs = []
         for q in case.get("queries", [])[:40]:
             qs.append(q if isinstance(q, dict) else {"sql": str(q)})
-        out.append({"seed": seed, "setup": setup, "queries": [{"sql": str(q["sql"])[:6000], "unordered": bool(q.get("unordered", False))} for q in qs]})
+        out.append({"seed": seed, "setup": setup, "queries": [{"sql": str(q["sql"])[:6000], "unordered": bool(q.get("unordered", False)),
+                                                               "expect_empty": bool(q.get("expect_empty", False))} for q in qs]})
     except Exception as e:
         out.append({"seed": seed, "error": type(e).__name__ + ": " + str(e)[:120]})
 print(json.dumps({"meta": env.get("META"), "cases": out}))
@@ -196,6 +199,7 @@ LIMITY = re.compile(r"\b(limit|offset|top)\b", re.I)
 def norm(v):
     if isinstance(v, float):
         if v != v: return "NaN"
+        if abs(v) < 1e-9: return 0.0          # summation order noise around zero (e.g. skewness 0.0 vs 4.98e-18)
         return float(f"{v:.7g}")
     if isinstance(v, (list, tuple)): return tuple(norm(x) for x in v)
     if isinstance(v, dict): return tuple(sorted((k, norm(x)) for k, x in v.items()))
@@ -223,7 +227,16 @@ def plan_info(con, sql):
         if isinstance(n, list): return "|".join(full(x) for x in n)
         ei = re.sub(r"\d+", "N", json.dumps(n.get("extra_info", {}), sort_keys=True))
         return n.get("name", "?") + ei + "[" + "|".join(full(c) for c in (n.get("children") or [])) + "]"
-    return tree(j), full(j)
+    return tree(j), full(j), json.dumps(j).lower()
+
+def marker_count(raw, markers):
+    """Calls of the rule's marker functions ON A BARE COLUMN in a plan: the column is the first argument (`left(s, 3)`) or the
+    last one (`date_trunc('hour', x)`, `year(x)`, `cast(x AS date)`); the function name may be quoted (`"left"(...)`, a keyword).
+    A call on constants only is excluded, because constant folding (also part of the expression rewriter) removes it
+    without the rule ever running; a column or alias that is merely named like the function does not count either."""
+    ident = r'\\?"?[a-z_][\w.]*\\?"?'
+    return sum(len(re.findall(r'(?<![\w.])\\?"?' + re.escape(m.lower()) + r'\\?"?\s*\((?:\s*' + ident + r'\s*[,)]|(?:[^()]*,\s*)?'
+                              + ident + r'(?:\s+as\s+[a-z_]\w*)?\s*\))', raw)) for m in markers)
 
 def strip_comments(sql):
     return re.sub(r"--[^\n]*|/\*.*?\*/", " ", sql, flags=re.S)
@@ -277,12 +290,20 @@ for case in d["cases"]:
                 b = plan_info(runs["switch_off"][0], q["sql"])
                 info["reach"] = bool(a and b and a[1] != b[1])
                 info["reach_tree"] = bool(a and b and a[0] != b[0])
+                # rule-level reach: the rule's marker function is rewritten away (fewer calls with the rewriter on than off).
+                # Generic expression reach is nearly always true when the whole expression_rewriter is flipped, so a rule
+                # target is judged on this signal only.
+                if d.get("markers"):
+                    info["rule_reach"] = bool(a and b and marker_count(a[2], d["markers"]) < marker_count(b[2], d["markers"]))
         findings = []
         for name, (c, res) in runs.items():
             s2, v2 = res[i]
             if s2 in ("internal", "fatal"):
                 findings.append({"kind": s2, "config": name, "detail": str(v2)[:200]})
-        bare = strip_comments(q["sql"])          # words inside comments must not switch the comparison off; the "unordered" flag is ignored (rows are compared as sorted lists anyway)
+            # self-check query (e.g. compressed copy EXCEPT ALL uncompressed copy): any row is a wrong result
+            if q.get("expect_empty") and s2 == "ok" and v2:
+                findings.append({"kind": "self_check", "config": name, "detail": "%d rows, expected none: %s" % (len(v2), v2[:2])})
+        bare = re.sub(r"\bnulls\s+(first|last)\b", " ", strip_comments(q["sql"]), flags=re.I)   # NULLS FIRST/LAST is deterministic; only first()/last() aggregates are not          # words inside comments must not switch the comparison off; the "unordered" flag is ignored (rows are compared as sorted lists anyway)
         comparable = not NONDET.search(bare) and not (LIMITY.search(bare) and "order by" not in bare.lower())
         info["comparable"] = bool(comparable and st == "ok")
         if comparable and st == "ok":
@@ -293,6 +314,12 @@ for case in d["cases"]:
                     findings.append({"kind": "config_diff", "config": name, "detail": "default %d rows %s | %s %d rows %s" % (len(val), val[:2], name, len(v2), v2[:2])})
                 elif s2 != "ok" and s2 not in ("internal", "fatal"):
                     findings.append({"kind": "error_diff", "config": name, "detail": "default ok | %s %s" % (name, str(v2)[:100])})
+        # an error that only the DEFAULT configuration raises: the optimizer/rewrite introduced it (upstream treats this as a
+        # bug: rewrites must leave errors to execution, see 2.0's "Leave errors of constant arguments to execution")
+        if st == "err" and comparable and sw and "switch_off" in runs:
+            s2, v2 = runs["switch_off"][1][i]
+            if s2 == "ok":
+                findings.append({"kind": "error_diff", "config": "switch_off", "detail": "default %s | switch_off ok %d rows" % (str(val)[:100], len(v2))})
         info["findings"] = findings
         out["queries"].append(info)
     print(json.dumps(out), flush=True)
@@ -311,6 +338,8 @@ def quality_verdict(*, nq: int, nvalid: int, templates: int, shapes: int, cases:
         flags.append(f"only {templates} distinct valid-query skeletons for {nvalid} valid queries (need >= {need_t})")
     if nvalid >= 100 and shapes < need_s:
         flags.append(f"only {shapes} distinct physical-plan operator trees for {cases} cases (need >= {need_s})")
+    if (target or {}).get("rule") and not (target or {}).get("marker"):
+        flags.append("rule target without a marker function: rule-level reach cannot be measured (generic expression reach does not count)")
     if has_switch and nvalid >= 100 and (reach_rate or 0.0) < 0.3:
         flags.append(f"reach rate {(reach_rate or 0.0):.0%} < 30%: the queries rarely exercise the target ({target})")
     if nvalid >= 100 and comparable_rate < 0.5:
@@ -330,14 +359,14 @@ def switch_statement(target: dict) -> str:
     return ""
 
 
-def execute(cases: list[dict], switch: str, timeout: float = 900.0) -> tuple[list[dict], list[dict]]:
+def execute(cases: list[dict], switch: str, timeout: float = 900.0, markers: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     """Run cases in worker processes (crash-isolated). Returns (per-case results, worker-level problems)."""
     results: list[dict] = []
     problems: list[dict] = []
     todo = [c for c in cases if "error" not in c]
     while todo:
         try:
-            p = subprocess.run([str(devcheck.DEV_PY), "-I", "-c", EXEC_CHILD], input=json.dumps({"cases": todo, "switch": switch}),
+            p = subprocess.run([str(devcheck.DEV_PY), "-I", "-c", EXEC_CHILD], input=json.dumps({"cases": todo, "switch": switch, "markers": markers or []}),
                                capture_output=True, text=True, timeout=timeout)
             out, rc, hung = p.stdout, p.returncode, False
         except subprocess.TimeoutExpired as e:
@@ -380,12 +409,14 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
     cases = gen["cases"]
     gen_errors = Counter(c["error"] for c in cases if "error" in c)
     ok_cases = [c for c in cases if "error" not in c and c["queries"]]
-    results, problems = execute(ok_cases, sw)
+    rule = target.get("rule")
+    markers = [m for m in (target.get("marker") or []) if isinstance(m, str) and re.fullmatch(r"[A-Za-z_]\w*", m)] if rule else []
+    results, problems = execute(ok_cases, sw, markers=markers)
     by_seed = {c["seed"]: c for c in ok_cases}
     out_dir = out_dir or OUT / name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    nq = nvalid = nreach = nreach_tree = ncomparable = 0
+    nq = nvalid = nreach = nreach_tree = ncomparable = nrule = 0
     templates: set[str] = set()
     per_case: Counter = Counter()
     sigs: Counter = Counter()
@@ -409,8 +440,9 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
                 if info["sig"]:
                     sigs[info["sig"]] += 1
                 nreach_tree += 1 if info.get("reach_tree") else 0
-                if info["reach"]:
-                    nreach += 1
+                nrule += 1 if info.get("rule_reach") else 0
+                nreach += 1 if info["reach"] else 0
+                if (info.get("rule_reach") if rule else info["reach"]):
                     if len(examples["reach"]) < 2:
                         examples["reach"].append(sql[:300])
                 elif sw and len(examples["miss"]) < 2:
@@ -437,7 +469,7 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
     (out_dir / "hits.jsonl").write_text("".join(json.dumps(h) + "\n" for h in uniq.values()))
     shapes = len(sigs)
     flags, warns = quality_verdict(nq=nq, nvalid=nvalid, templates=len(templates), shapes=shapes, cases=len(results),
-                                   reach_rate=(nreach / nvalid if nvalid else 0.0) if sw else None,
+                                   reach_rate=((nrule if rule else nreach) / nvalid if nvalid else 0.0) if sw else None,
                                    comparable_rate=(ncomparable / nvalid if nvalid else 0.0), has_switch=bool(sw), target=target)
     comparable_rate = ncomparable / nvalid if nvalid else 0.0
     if len(per_case) == 1 and nq >= 200:
@@ -454,7 +486,10 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
         "generator": str(path), "name": name, "target": target, "n_cases": n, "generator_errors": dict(gen_errors),
         "cases_run": len(results), "setup_ok": sum(1 for r in results if r.get("valid_setup")),
         "queries": nq, "valid_queries": nvalid, "valid_rate": round(nvalid / nq, 3) if nq else 0,
-        "reach_queries": nreach, "reach_rate": round(nreach / nvalid, 3) if (nvalid and sw) else None,
+        # for a rule target reach_rate IS the rule-level reach (marker rewritten away); expr_reach_rate is the generic signal
+        "reach_queries": nrule if rule else nreach,
+        "reach_rate": round((nrule if rule else nreach) / nvalid, 3) if (nvalid and sw) else None,
+        "expr_reach_rate": round(nreach / nvalid, 3) if (nvalid and sw) else None, "rule": rule, "markers": markers,
         "distinct_plan_signatures": len(sigs), "hits_total": len(hits), "hits_unique": len(uniq),
         "hit_kinds": dict(Counter(h["kind"] for h in uniq.values())), "worker_problems": problems[:3],
         "top_errors": errs.most_common(6), "examples": examples, "has_switch": bool(sw), "seed": seed,
@@ -475,7 +510,11 @@ def feedback_text(m: dict) -> str:
          f"* distinct query templates: {m['distinct_templates']}; queries per case: {m['queries_per_case']}", ""
          f"* cases generated {m['n_cases']}, ran {m['cases_run']}, setup valid {m['setup_ok']}",
          f"* queries {m['queries']}, valid {m['valid_queries']} (**valid rate {m['valid_rate']:.1%}**)"]
-    if m["has_switch"]:
+    if m["has_switch"] and m.get("rule"):
+        L.append(f"* **rule reach {m['reach_rate']:.1%}** of valid queries: the marker function(s) {m.get('markers')} of rule `{m['rule']}` are rewritten away "
+                 f"when the rewriter is on (generic expression change: {m.get('expr_reach_rate') or 0:.1%}, which does NOT count); "
+                 f"{m['distinct_plan_signatures']} distinct operator trees")
+    elif m["has_switch"]:
         L.append(f"* **reach rate {m['reach_rate']:.1%}** of valid queries: the plan changes when the target switch ({m['target']}) is flipped; "
                  f"{m['distinct_plan_signatures']} distinct operator trees")
     else:

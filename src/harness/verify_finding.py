@@ -204,6 +204,128 @@ def match_registry(message: str, frames: list[str], script: str, depends_on: dic
     return out
 
 
+# ---------------------------------------------------------------------------- wrong results (config differences)
+# A wrong result has no error text, so the error-based path above cannot verify, deduplicate or search it. This path replays
+# the script's LAST statement under the default configuration and under the alternative one (the SET/PRAGMA the hit was
+# found with), each twice in fresh processes, plus a third vote with every optimizer disabled.
+RESULT_CHILD = r'''
+import json, sys, math
+dev = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
+if dev: sys.path.insert(0, dev)
+import duckdb
+d = json.load(sys.stdin)
+c = duckdb.connect(":memory:")
+for s in ["SET max_execution_time=30000", "SET memory_limit='1GB'", "SET threads=2"] + d["pre"]:
+    c.execute(s)
+def norm(v):
+    if isinstance(v, float):
+        return "nan" if math.isnan(v) else repr(round(v, 9))
+    if isinstance(v, (list, tuple)): return [norm(x) for x in v]
+    if isinstance(v, dict): return {k: norm(x) for k, x in v.items()}
+    return repr(v)
+out = {"version": duckdb.__version__}
+for st in d["setup"]:
+    try: c.execute(st)
+    except Exception as e: out.setdefault("setup_errors", []).append(str(e)[:120])
+try:
+    out["rows"] = sorted(json.dumps(norm(r)) for r in c.execute(d["query"]).fetchall())
+except Exception as e:
+    out["error"] = type(e).__name__ + ": " + " ".join(str(e).split())[:200]
+print(json.dumps(out))
+'''
+CONFIG_STMT = re.compile(r"^\s*(SET\s+\w+\s*=|PRAGMA\s+enable_verification)", re.I)
+
+
+def _run_result(setup: list[str], query: str, pre: list[str], python: str, dev_site: str = "") -> dict:
+    try:
+        p = subprocess.run([python, "-c", RESULT_CHILD, "x", dev_site], input=json.dumps({"setup": setup, "query": query, "pre": pre}),
+                           capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    if p.returncode != 0 or not p.stdout.strip():
+        return {"error": f"crash rc={p.returncode}"}
+    return json.loads(p.stdout.strip().splitlines()[-1])
+
+
+def split_diff_script(sql: str) -> tuple[list[str], list[str], str]:
+    """(alternative-config statements, setup statements, compared query) of a gen_runner config_diff script:
+    leading SET/PRAGMA lines are the configuration the result differed in, the last statement is the compared query."""
+    stmts = split(sql)
+    alt: list[str] = []
+    while stmts and CONFIG_STMT.match(stmts[0]):
+        alt.append(stmts.pop(0))
+    if not stmts:
+        return alt, [], ""
+    return alt, stmts[:-1], stmts[-1]
+
+
+def verify_diff(sql: str, dev_site: str = "", alt: list[str] | None = None) -> dict:
+    """Verdict for a wrong-result candidate.
+    wrong_result      default and alternative config each give the same rows twice, and the two differ
+    nondeterministic  a configuration disagrees with itself (unordered LIMIT, ties, races): not a finding as is
+    not_reproducible  alone, both configurations agree
+    `suspect` names the side that disagrees with the all-optimizers-off vote (the side that is probably wrong)."""
+    alt_found, setup, query = split_diff_script(sql)
+    alt = alt if alt is not None else alt_found
+    py = sys.executable
+    if not query or not alt:
+        return {"verdict": "verify_error", "signature": "no query or no alternative configuration in the script", "fixed_in_dev": False}
+    optimizers = subprocess.run([py, "-c", "import duckdb;print(','.join(r[0] for r in duckdb.connect().execute('select name from duckdb_optimizers()').fetchall()))"],
+                                capture_output=True, text=True).stdout.strip()
+    d1, d2 = _run_result(setup, query, [], py), _run_result(setup, query, [], py)
+    a1, a2 = _run_result(setup, query, alt, py), _run_result(setup, query, alt, py)
+    noopt = _run_result(setup, query, [f"SET disabled_optimizers='{optimizers}'"], py)
+    key = lambda r: r.get("rows", r.get("error"))                          # noqa: E731
+    out = {"kind": "wrong_result", "alt": alt, "query": query, "wheel_version": d1.get("version"),
+           "rows_default": len(d1.get("rows", [])), "rows_alt": len(a1.get("rows", [])),
+           "example_default": (d1.get("rows") or [d1.get("error")])[:3], "example_alt": (a1.get("rows") or [a1.get("error")])[:3]}
+    if key(d1) != key(d2) or key(a1) != key(a2):
+        out["verdict"] = "nondeterministic"
+    elif "error" in d1 or "error" in a1:
+        out["verdict"] = "error_diff" if key(d1) != key(a1) else "not_reproducible"
+        # which side raised the error: the side the all-optimizers-off vote agrees with is probably right
+        if out["verdict"] == "error_diff":
+            out["suspect"] = ("default" if key(noopt) == key(a1) else "alternative" if key(noopt) == key(d1) else "unclear")
+    elif key(d1) == key(a1):
+        out["verdict"] = "not_reproducible"
+    else:
+        out["verdict"] = "wrong_result"
+        out["suspect"] = ("default" if key(noopt) == key(a1) else "alternative" if key(noopt) == key(d1) else "unclear")
+    out["fixed_in_dev"] = False
+    if dev_site and out["verdict"] == "wrong_result":
+        dd, da = _run_result(setup, query, [], py, dev_site), _run_result(setup, query, alt, py, dev_site)
+        out["dev_version"] = dd.get("version")
+        out["fixed_in_dev"] = key(dd) == key(da) and key(dd) == key(noopt)
+    out["signature"] = f"{out['verdict']} [{' ; '.join(alt)}] default {out['rows_default']} rows vs {out['rows_alt']} rows"
+    out["registry"] = match_registry_diff(sql, alt) if out["verdict"] in ("wrong_result", "error_diff") else []
+    return out
+
+
+def match_registry_diff(script: str, alt: list[str]) -> list[dict]:
+    """Registry match for wrong results (entries with "kind": "wrong_result").
+    rediscovery: every `script_regex_all` matches the script (comments removed, strings KEPT: a date_trunc part or a type
+                 name lives in a literal) AND the alternative configuration matches `switch_regex` (the difference
+                 disappears exactly when the switch that the known bug depends on is flipped)
+    sibling:     the switch and the entry's `family_regex` (e.g. the function involved) match but the precise shape does not:
+                 the same rule may be wrong in a new way, so a human must look"""
+    try:
+        reg = json.loads(KNOWN_ISSUES_PATH.read_text())
+    except (OSError, ValueError):
+        return []
+    text = re.sub(r"\s+", " ", re.sub(r"/\*.*?\*/|--[^\n]*", " ", script, flags=re.S)).lower()
+    sw = " ; ".join(alt).lower()
+    out = []
+    for k in reg:
+        if k.get("kind") != "wrong_result" or not re.search(k.get("switch_regex", "$^"), sw):
+            continue
+        exact = bool(k.get("script_regex_all")) and all(re.search(r, text) for r in k["script_regex_all"])
+        fam = bool(k.get("family_regex") and re.search(k["family_regex"], text))
+        if exact or fam:
+            out.append({"issue": k["issue"], "ours": bool(k.get("ours")), "status": k.get("status", ""), "title": k.get("title", ""),
+                        "relation": "rediscovery" if exact else "sibling"})
+    return out
+
+
 def verify(sql: str, dev_site: str = "", search: bool = False) -> dict:
     stmts = split(sql)
     py = sys.executable
@@ -263,7 +385,11 @@ def main() -> None:
     ap.add_argument("script")
     ap.add_argument("--dev-site", default="")
     ap.add_argument("--search", action="store_true")
+    ap.add_argument("--diff", action="store_true", help="wrong-result candidate (gen_runner config_diff script): compare default vs the leading SET/PRAGMA")
     a = ap.parse_args()
+    if a.diff:
+        print(json.dumps(verify_diff(Path(a.script).read_text(), a.dev_site), indent=1))
+        return
     print(json.dumps(verify(Path(a.script).read_text(), a.dev_site, a.search), indent=1))
 
 
