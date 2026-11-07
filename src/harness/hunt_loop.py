@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -236,6 +237,15 @@ class Hunt:
         self.save()
         return res
 
+    def scale(self, card: dict, st: dict, g: Path) -> None:
+        if not ram_guard(self.dir, self.a.min_free_gb):
+            return
+        m = gen_runner.run_generator(g, self.a.scale_cases, 2, self.dir / "gens" / f"{st['best']}_scale", quiet=True)
+        log(self.dir, f"{st['best']} scale run: {m.get('cases_run')} cases, hits={m.get('hits_unique')} {m.get('hit_kinds')}")
+        triaged = self.triage(f"{st['best']}_scale", m, card) if m.get("ok") else []
+        st["found"] += sum(1 for t in triaged if t["cls"] in ("candidate_new", "sibling"))
+        self.save()
+
     def feedback(self, name: str, m: dict | None, triaged: list[dict]) -> str:
         if m is None:
             return "Your previous answer could not be used (no code block or the call failed). Output only the Python file."
@@ -262,7 +272,11 @@ class Hunt:
             log(self.dir, f"target {card['name']} ({card['kind']}, switch {card['switch']}, score {card['score']})")
             while st["rounds"] < self.a.rounds and self.left() > 600 and self.ledger["llm_calls"] < self.a.max_llm_calls:
                 k = st["rounds"] + 1                          # counted only once the round completes (a kill/sleep mid-round is retried)
-                name, m = self.round(card, k, feedback)
+                try:
+                    name, m = self.round(card, k, feedback)
+                except Exception as e:                        # noqa: BLE001 - one bad unit must not end a multi-hour run
+                    name, m = f"hunt_{self.a.run}_{card['name']}_r{k}", {"rejected": [f"harness error: {type(e).__name__}: {str(e)[:200]}"]}
+                    log(self.dir, f"{name}: harness error (round counted, run continues): {traceback.format_exc()[-600:]}")
                 if m and m.get("llm_failed"):
                     # usage limit / network / sleep: do NOT count the round or retire the target; back off, then stop cleanly
                     self.llm_failures += 1
@@ -277,7 +291,11 @@ class Hunt:
                     continue
                 self.llm_failures = 0
                 st["rounds"] = k
-                triaged = self.triage(name, m, card) if m and m.get("ok") else []
+                try:
+                    triaged = self.triage(name, m, card) if m and m.get("ok") else []
+                except Exception:                             # noqa: BLE001
+                    log(self.dir, f"{name}: triage error (hits kept in gens/{name}/hits.jsonl): {traceback.format_exc()[-600:]}")
+                    triaged = []
                 found = sum(1 for t in triaged if t["cls"] in ("candidate_new", "sibling"))
                 st["found"] += found
                 if m and m.get("quality") == "ok":
@@ -293,12 +311,12 @@ class Hunt:
                 break
             if any_ok and st.get("best") and self.left() > 1200 and not st.get("scaled"):
                 g = WORK / "generators" / f"{st['best']}.py"
-                if ram_guard(self.dir, self.a.min_free_gb):
-                    m = gen_runner.run_generator(g, self.a.scale_cases, 2, self.dir / "gens" / f"{st['best']}_scale", quiet=True)
-                    log(self.dir, f"{st['best']} scale run: {m.get('cases_run')} cases, hits={m.get('hits_unique')} {m.get('hit_kinds')}")
-                    st["scaled"] = True
-                    triaged = self.triage(f"{st['best']}_scale", m, card) if m.get("ok") else []
-                    st["found"] += sum(1 for t in triaged if t["cls"] in ("candidate_new", "sibling"))
+                st["scaled"] = True                          # set first: a crash in the scale run must not repeat it forever
+                self.save()
+                try:
+                    self.scale(card, st, g)
+                except Exception:                             # noqa: BLE001
+                    log(self.dir, f"{st['best']} scale run error: {traceback.format_exc()[-600:]}")
             if st["rounds"] >= self.a.rounds:
                 st["status"] = "retired"
             self.save()

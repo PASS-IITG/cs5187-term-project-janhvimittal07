@@ -10,6 +10,9 @@ import random
 
 META = {"name": "control_date_trunc", "author_model": "human-control",
         "target": {"optimizer": "expression_rewriter", "rule": "date_trunc_simplification", "marker": ["date_trunc", "datetrunc"]},
+        "hypothesis": "DateTruncSimplificationRule casts the bounds date_trunc(part, c) / date_trunc(part, c + 1 part) to the column "
+                      "type; for a DATE column and a sub-day part the time of day is lost, so the range collapses (upstream 28527).",
+        "preconditions": "date_trunc(constant part, bare column) compared with a foldable constant; finite constant; any comparison operator.",
         "description": "date_trunc(part, col) OP const under the expression rewriter (DateTruncSimplificationRule)"}
 
 PARTS = ["millennium", "century", "decade", "year", "quarter", "month", "week", "isoyear", "day", "hour", "minute", "second",

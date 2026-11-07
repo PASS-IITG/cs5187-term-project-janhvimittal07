@@ -24,8 +24,10 @@ import gen_runner  # noqa: E402
 import verify_finding  # noqa: E402
 
 OUT = gen_runner.WORK / "results" / "targeted" / "controls"
-REDISCOVERY = [("rule_timestamp_cast_date", 28531), ("rule_cast_comparison", 28532), ("rule_date_trunc_edges", 28534),
-               ("rule_arith_constants", 28535)]
+# (generator, issue, cases, seed): the settings under which each bug surfaced in the 2026-11-07 session (28532 needs a rare
+# all-infinity TIMESTAMP_MS table, which seed 1 at 300 cases does not produce)
+REDISCOVERY = [("rule_timestamp_cast_date", 28531, 300, 1), ("rule_cast_comparison", 28532, 400, 2), ("rule_date_trunc_edges", 28534, 300, 1),
+               ("rule_arith_constants", 28535, 400, 1)]
 
 
 def main() -> int:
@@ -64,9 +66,12 @@ def main() -> int:
     if a.rediscovery:
         # each session generator that found a bug must still produce a hit that gen_triage classifies as a rediscovery of it
         import gen_triage
-        for gen, issue in REDISCOVERY:
+        for gen, issue, n, seed in REDISCOVERY:
             od = OUT / f"control_{gen}"
-            m = gen_runner.run_generator(HERE / f"control_{gen}.py", a.n, a.seed, od, quiet=True)
+            if od.exists():
+                import shutil
+                shutil.rmtree(od)                              # triage.jsonl is appended to: start clean
+            m = gen_runner.run_generator(HERE / f"control_{gen}.py", n, seed, od, quiet=True)
             res = gen_triage.triage_file(od / "hits.jsonl", od / "triage", None, search=False, max_hits=8) if m.get("ok") else []
             rel = sorted({(str(r["issue"]), r["relation"]) for t in res for r in t.get("registry") or []})
             classes = sorted({t["cls"] for t in res})
