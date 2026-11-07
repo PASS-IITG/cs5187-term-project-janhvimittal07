@@ -99,6 +99,14 @@ def fix_tests(fix_shas: list[str], limit: int = 8) -> list[str]:
     return tests[:limit]
 
 
+def score(is_rule: bool, markers: list[str], commits: int, fixes: int, value_sites: int) -> int:
+    """Rank targets like the ones that produced the 2026-11-07 bugs (upstream 28527/28531/28532/28534/28535/28536): expression
+    rules that BUILD new values (bounds, folded constants, casts) and have recent fixes. Raw churn is capped so that busy
+    operator-level optimizers (heavily exercised upstream, and whose differences are mostly the accepted error-hiding kind)
+    do not dominate the ranking."""
+    return 2 * min(fixes, 6) + min(commits, 15) + 3 * min(value_sites, 10) + (15 if is_rule else 0) + (5 if is_rule and markers else 0)
+
+
 def card(path: Path, since: str, sw_names: set[str]) -> dict | None:
     rel = str(path.relative_to(SRC))
     text = path.read_text(errors="replace")
@@ -115,7 +123,7 @@ def card(path: Path, since: str, sw_names: set[str]) -> dict | None:
     if is_rule and mk:
         target.update(rule=stem, marker=mk)
     c = {"name": stem, "file": rel, "kind": "expression rule" if is_rule else "optimizer", "switch": switch, "target": target,
-         "markers": mk, "commits": len(log), "fix_commits": len(fixes), "score": len(log) + 2 * len(fixes) + (3 if is_rule and mk else 0),
+         "markers": mk, "commits": len(log), "fix_commits": len(fixes), "score": score(is_rule, mk, len(log), len(fixes), len(constant_sites(lines))),
          "fix_subjects": [s[:140] for _, s in fixes[:10]], "fix_tests": fix_tests([h for h, _ in fixes]),
          "preconditions": preconditions(lines), "constant_sites": constant_sites(lines), "lines": len(lines)}
     if is_rule and not mk:
