@@ -20,6 +20,8 @@ GENERATOR CONTRACT (a plain python file, pure and deterministic per seed):
     # {"sql": ..., "expect_empty": True} is a self-check: any row it returns (in any config) is reported as a finding,
     # for oracles the config flip cannot express (e.g. a compressed copy of a table EXCEPT ALL an uncompressed copy)
 
+EDGES: a read-only dict, type name -> tuple of SQL literals at the edges of that type (harness/edge_values.py).
+RULE TARGETS must also set META["hypothesis"] (what in the rule's code should break) and META["preconditions"].
 ALLOWED: imports of random, itertools, string, math, textwrap, functools, collections only; no open/exec/eval/getattr/
 dunder access/global state. Anything else is rejected before a single line runs.
 
@@ -155,7 +157,7 @@ def guarded(name, *a, **k):
         raise ImportError(name)
     return real_import(name, *a, **k)
 safe["__import__"] = guarded
-env = {"__builtins__": safe, "__name__": "gen"}
+env = {"__builtins__": safe, "__name__": "gen", "EDGES": {k: tuple(v) for k, v in req.get("edges", {}).items()}}
 exec(compile(req["src"], "gen.py", "exec"), env)
 out = []
 def alarm(*_): raise TimeoutError("generate() took > 5 s")
@@ -178,7 +180,8 @@ print(json.dumps({"meta": env.get("META"), "cases": out}))
 
 
 def generate_cases(src: str, seeds: list[int]) -> dict:
-    p = subprocess.run([sys.executable, "-I", "-c", GEN_CHILD], input=json.dumps({"src": src, "seeds": seeds, "builtins": SAFE_BUILTINS,
+    import edge_values
+    p = subprocess.run([sys.executable, "-I", "-c", GEN_CHILD], input=json.dumps({"src": src, "seeds": seeds, "builtins": SAFE_BUILTINS, "edges": edge_values.EDGES,
                                                                                "imports": sorted(ALLOWED_IMPORTS)}),
                        capture_output=True, text=True, timeout=900, cwd=str(WORK / "work-scratch") if (WORK / "work-scratch").exists() else None)
     if p.returncode != 0 or not p.stdout.strip():
@@ -476,10 +479,14 @@ def run_generator(path: Path, n: int, seed: int, out_dir: Path | None = None, qu
         warns.append(f"every case has exactly {next(iter(per_case))} queries (fine only if the queries themselves vary structurally)")
     if sw and nreach and nreach_tree / nreach < 0.3:
         warns.append("most reaching queries change only expressions, not operators (fine for expression-level optimizers, check the examples)")
+    if rule and not (meta.get("hypothesis") and meta.get("preconditions")):
+        flags.append("rule target without META['hypothesis'] and META['preconditions']: state what in the rule's code you expect to "
+                     "break and which preconditions of Apply()/CanOptimize() the queries satisfy")
     quality = "LOW DIVERSITY - NOT A REAL TEST" if flags else "ok"
     metrics = {
         "quality": quality, "quality_flags": flags, "quality_warnings": warns, "distinct_templates": len(templates),
-        "author_model": meta.get("author_model"), "generator_sha256": hashlib.sha256(src.encode()).hexdigest(),
+        "author_model": meta.get("author_model"), "hypothesis": meta.get("hypothesis"), "preconditions": meta.get("preconditions"),
+        "generator_sha256": hashlib.sha256(src.encode()).hexdigest(),
         "target_key": json.dumps(target, sort_keys=True), "comparable_rate": round(comparable_rate, 3),
         "reach_tree_rate": round(nreach_tree / nvalid, 3) if (nvalid and sw) else None,
         "queries_per_case": dict(sorted(per_case.items())),

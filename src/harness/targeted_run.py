@@ -314,6 +314,10 @@ class Run:
                 reasons.append(f"cases={g.get('cases_run')}")
             if not g.get("author_model"):
                 reasons.append("no author_model")
+            elif str(g["author_model"]).startswith(("control:", "human-control")):
+                reasons.append("a control (human- or session-written, kept out of the LLM loop), not an LLM-written generator")
+            if g.get("rule") and not g.get("hypothesis"):
+                reasons.append("rule target without a stated hypothesis (META['hypothesis'])")
             gp = Path(g.get("generator", ""))
             if not (gp.exists() and g.get("generator_sha256") == hashlib.sha256(gp.read_text().encode()).hexdigest()):
                 reasons.append("generator file missing or changed since the metrics were written")

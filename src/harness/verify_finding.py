@@ -233,7 +233,9 @@ except Exception as e:
     out["error"] = type(e).__name__ + ": " + " ".join(str(e).split())[:200]
 print(json.dumps(out))
 '''
-CONFIG_STMT = re.compile(r"^\s*(SET\s+\w+\s*=|PRAGMA\s+enable_verification)", re.I)
+# only the switches gen_runner prepends to a hit script count as the alternative configuration; any other leading SET
+# (e.g. SET TimeZone in a generator's setup) belongs to the setup and must run in BOTH configurations
+CONFIG_STMT = re.compile(r"^\s*(SET\s+(disabled_optimizers|delim_join_as_cte|threads)\s*=|PRAGMA\s+enable_verification)", re.I)
 
 
 def _run_result(setup: list[str], query: str, pre: list[str], python: str, dev_site: str = "") -> dict:
@@ -252,7 +254,7 @@ def split_diff_script(sql: str) -> tuple[list[str], list[str], str]:
     leading SET/PRAGMA lines are the configuration the result differed in, the last statement is the compared query."""
     stmts = split(sql)
     alt: list[str] = []
-    while stmts and CONFIG_STMT.match(stmts[0]):
+    if stmts and CONFIG_STMT.match(stmts[0]):
         alt.append(stmts.pop(0))
     if not stmts:
         return alt, [], ""

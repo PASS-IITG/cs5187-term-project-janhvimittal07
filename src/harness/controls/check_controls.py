@@ -4,6 +4,8 @@
 
 positive  control_date_trunc.py must be Quality: ok on RULE-level reach, produce wrong-result hits, and every hit must
           verify (verify_finding.verify_diff) as a deterministic wrong result classified as a REDISCOVERY of issue 28527.
+rediscovery (--rediscovery) the four session generators that found upstream 28531/28532/28534 and the UBIGINT bug must
+          still produce a hit that harness/gen_triage.py classifies as a rediscovery of exactly that issue.
 negative  cheat_rule_reach.py names the same rule but never gives it a bare column: it must be rejected on rule reach
           even though its generic expression-level reach is high.
 Prints CONTROLS PASSED / CONTROLS FAILED. Outputs go to $FUZZ_WORK/results/targeted/controls/ (never to gens/, which the
@@ -22,6 +24,8 @@ import gen_runner  # noqa: E402
 import verify_finding  # noqa: E402
 
 OUT = gen_runner.WORK / "results" / "targeted" / "controls"
+REDISCOVERY = [("rule_timestamp_cast_date", 28531), ("rule_cast_comparison", 28532), ("rule_date_trunc_edges", 28534),
+               ("rule_arith_constants", 28535)]
 
 
 def main() -> int:
@@ -29,6 +33,7 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=300)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--max-verify", type=int, default=6)
+    ap.add_argument("--rediscovery", action="store_true", help="also run the four session generators and require a rediscovery of their issue (~20 min)")
     a = ap.parse_args()
     fails: list[str] = []
     dev = gen_runner.WORK / "dev-snapshot"
@@ -55,6 +60,21 @@ def main() -> int:
         fails.append("cheat generator passed the judge: rule-level reach does not stop constant-folding / non-column calls")
     if not any("reach" in f for f in neg.get("quality_flags", [])):
         fails.append(f"cheat generator rejected, but not on reach: {neg.get('quality_flags')}")
+
+    if a.rediscovery:
+        # each session generator that found a bug must still produce a hit that gen_triage classifies as a rediscovery of it
+        import gen_triage
+        for gen, issue in REDISCOVERY:
+            od = OUT / f"control_{gen}"
+            m = gen_runner.run_generator(HERE / f"control_{gen}.py", a.n, a.seed, od, quiet=True)
+            res = gen_triage.triage_file(od / "hits.jsonl", od / "triage", None, search=False, max_hits=8) if m.get("ok") else []
+            rel = sorted({(str(r["issue"]), r["relation"]) for t in res for r in t.get("registry") or []})
+            classes = sorted({t["cls"] for t in res})
+            ok = any(t["cls"] == "rediscovery" and any(str(r["issue"]) == str(issue) and r["relation"] == "rediscovery" for r in t.get("registry") or [])
+                     for t in res)
+            print(f"rediscovery {gen} -> {issue}: hits={m.get('hits_unique')} classes={classes} {'OK' if ok else 'MISSING'}")
+            if not ok:
+                fails.append(f"control_{gen} did not rediscover {issue} (classes {classes}, registry {rel[:4]})")
 
     print("CONTROLS FAILED\n" + "\n".join("[FAIL] " + f for f in fails) if fails else "CONTROLS PASSED")
     return 1 if fails else 0

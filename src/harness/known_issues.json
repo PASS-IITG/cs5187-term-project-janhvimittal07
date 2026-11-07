@@ -99,5 +99,28 @@
    "'294[2-9]\\d\\d-"
   ],
   "family_regex": "date_trunc\\s*\\(|datetrunc\\s*\\("
+ },
+ {
+  "issue": 28535,
+  "ours": true,
+  "status": "open, filed 2026-11-07 (needs triage)",
+  "title": "IntegralValue::Get converts UBIGINT through int64 (NumericCast): MoveConstantsRule on a UBIGINT constant > INT64_MAX raises INTERNAL 'Information loss on integer cast'",
+  "message_regex": "Information loss on integer cast: value \\d+ outside of target range \\[-9223372036854775808, 9223372036854775807\\]",
+  "shape_all": [
+   "ubigint"
+  ]
+ },
+ {
+  "issue": 28536,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-07 (needs triage); first find of the automated hunt_loop",
+  "title": "RegexOptimizationRule: an empty group (?:) at the start/end of a pattern is treated as an anchor ('(?:)abc' -> prefix range, 'abc(?:)' -> suffix)",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "regexp_(matches|full_match|replace|extract)\\s*\\(",
+   "'(\\(\\?:\\)|\\(\\?:\\(\\?:\\)\\))+[^']|[^']\\(\\?:\\)+'"
+  ],
+  "family_regex": "regexp_(matches|full_match|replace|extract)\\s*\\("
  }
 ]
