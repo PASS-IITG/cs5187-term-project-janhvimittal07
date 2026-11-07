@@ -37,7 +37,9 @@ src/harness/hunt_start.sh --run hunt1 --hours 8 --max-llm-calls 60      # detach
   cleanly *without* retiring targets.
 - Kill / reboot: a round is only counted when it completes.
 - To resume, run the same command with the same `--run`: `ledger.json` keeps retired targets, completed rounds and candidates.
-- Laptop sleep pauses the run; a unit that spans the sleep may time out and is then logged as a timeout or artifact, never as
+- Idle sleep: on WSL the launcher keeps Windows awake (`keepawake.ps1`, SetThreadExecutionState) while the run lives. Closing
+  the LID still sleeps unless Windows is set to "Do nothing" on lid close. If it sleeps anyway, a unit that spans the sleep
+  may time out and is then logged as a timeout or artifact, never as
   a finding.
 
 Results go to `$FUZZ_WORK/results/hunt/<run>/`:
