@@ -162,5 +162,17 @@
    "\\bjoin\\b"
   ],
   "family_regex": "row_number\\s*\\(.*\\bjoin\\b"
+ },
+ {
+  "issue": 28562,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-08; found by hunt1",
+  "title": "EmptyNeedleRemovalRule folds contains(x,'') to TRUE for non-VARCHAR x (lists, structs)",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "contains\\s*\\([^;]*,\\s*(''|lower\\s*\\(\\s*''\\s*\\)|''::varchar)"
+  ],
+  "family_regex": "contains\\s*\\("
  }
 ]
