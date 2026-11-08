@@ -66,7 +66,8 @@ Generator rules (the judge enforces these):
 * Include NULLs, empty tables, duplicates and type-limit rows in the data; keep tables small (< 50 rows) unless the card says the
   optimizer only fires on large inputs (then use range(): CREATE TABLE f AS SELECT ... FROM range(20000) r(i)).
 * Contract: a plain Python file; only `import random` (also itertools, string, math, textwrap, functools, collections); no other
-  imports, no open/exec/eval/getattr/type, no dunder access. It must define
+  imports, no open/exec/eval/getattr/type, no dunder access, NO class definitions (top level: imports, assignments and
+  functions only; use dicts/tuples and functions instead). It must define
     META = {{"name": "{name}", "author_model": "{model}", "target": {target},
             "hypothesis": "<one paragraph: what in the code you expect to break and why>",
             "preconditions": "<the Apply()/CanOptimize() conditions your queries satisfy>",
