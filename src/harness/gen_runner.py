@@ -518,11 +518,11 @@ def feedback_text(m: dict) -> str:
          f"* cases generated {m['n_cases']}, ran {m['cases_run']}, setup valid {m['setup_ok']}",
          f"* queries {m['queries']}, valid {m['valid_queries']} (**valid rate {m['valid_rate']:.1%}**)"]
     if m["has_switch"] and m.get("rule"):
-        L.append(f"* **rule reach {m['reach_rate']:.1%}** of valid queries: the marker function(s) {m.get('markers')} of rule `{m['rule']}` are rewritten away "
+        L.append(f"* **rule reach {(m['reach_rate'] or 0):.1%}** of valid queries: the marker function(s) {m.get('markers')} of rule `{m['rule']}` are rewritten away "
                  f"when the rewriter is on (generic expression change: {m.get('expr_reach_rate') or 0:.1%}, which does NOT count); "
                  f"{m['distinct_plan_signatures']} distinct operator trees")
     elif m["has_switch"]:
-        L.append(f"* **reach rate {m['reach_rate']:.1%}** of valid queries: the plan changes when the target switch ({m['target']}) is flipped; "
+        L.append(f"* **reach rate {(m['reach_rate'] or 0):.1%}** of valid queries: the plan changes when the target switch ({m['target']}) is flipped; "
                  f"{m['distinct_plan_signatures']} distinct operator trees")
     else:
         L.append(f"* no target switch for this feature, so reach cannot be measured; {m['distinct_plan_signatures']} distinct operator trees")
