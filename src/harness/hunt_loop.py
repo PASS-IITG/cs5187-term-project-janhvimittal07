@@ -186,6 +186,11 @@ class Hunt:
 
     def round(self, card: dict, k: int, feedback: str) -> tuple[str, dict | None]:
         name = f"hunt_{self.a.run}_{card['name']}_r{k}"
+        # round 1 reads the code and forms the hypothesis (primary model); repair rounds fix SQL from feedback (cheaper model)
+        if self.a.repair_model and self.model_now == self.a.model:
+            self.model_now = self.a.model if k == 1 else self.a.repair_model
+        elif self.a.repair_model and self.model_now == self.a.repair_model and k == 1:
+            self.model_now = self.a.model
         prompt = self.prompt(card, name, feedback)
         (self.dir / "llm" / f"{name}.prompt.md").write_text(prompt)
         self.ledger["llm_calls"] += 1
@@ -361,6 +366,7 @@ def main() -> None:
     ap.add_argument("--llm-cmd", default="", help="replace the claude call with a command reading the prompt on stdin (tests)")
     ap.add_argument("--min-free-gb", type=float, default=1.5)
     ap.add_argument("--llm-backoff-s", type=int, default=300)
+    ap.add_argument("--repair-model", default="", help="model for rounds 2+ of a target (e.g. sonnet); '' = same as --model")
     ap.add_argument("--fallback-model", default="sonnet", help="author model after 2 consecutive failures of --model ('' = none)")
     ap.add_argument("--max-llm-failures", type=int, default=4, help="consecutive failed LLM calls (usage limit, network) before stopping cleanly")
     ap.add_argument("--max-triage", type=int, default=10)
