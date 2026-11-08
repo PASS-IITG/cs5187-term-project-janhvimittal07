@@ -122,5 +122,18 @@
    "'(\\(\\?:\\)|\\(\\?:\\(\\?:\\)\\))+[^']|[^']\\(\\?:\\)+'"
   ],
   "family_regex": "regexp_(matches|full_match|replace|extract)\\s*\\("
+ },
+ {
+  "issue": 28541,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-08 (needs triage); found by hunt1",
+  "title": "IntegralValue::Get UINT128 static_cast wraps UHUGEINT > 2^127-1: MoveConstantsRule computes a wrong constant, silent wrong results",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "uhugeint",
+   "(1701411834604692317316873037158841057(2[89]|[3-9]\\d)|17014118346046923173168730371588410[6-9]\\d{2}|1701411834604692317316873037158841[1-9]\\d{3}|170141183460469231731687303715884[2-9]\\d{4}|17014118346046923[2-9]\\d{21}|1701411834604692[4-9]\\d{22}|170141183460469[3-9]\\d{23}|17014118346047\\d{24}|1701411834605\\d{25}|170141183461\\d{26}|17014118347\\d{27}|1701411835\\d{28}|170141184\\d{29}|17014119\\d{30}|1701412\\d{31}|170142\\d{32}|17015\\d{33}|1702\\d{34}|171\\d{35}|1[89]\\d{37}|[2-3]\\d{38})"
+  ],
+  "family_regex": "uhugeint"
  }
 ]
