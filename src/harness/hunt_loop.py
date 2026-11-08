@@ -143,7 +143,7 @@ class Hunt:
                 shutil.copy(EXAMPLES / ex, self.cwd / ex)
         self.ledger_path = self.dir / "ledger.json"
         self.ledger = json.loads(self.ledger_path.read_text()) if self.ledger_path.exists() else {"targets": {}, "llm_calls": 0, "candidates": []}
-        self.t0 = time.time()
+        self.t0 = time.monotonic()      # awake time only: the clock freezes while the laptop sleeps (WSL VM suspended)
         self.llm_failures = 0
         self.stop = False
         self.model_now = a.model
@@ -152,7 +152,7 @@ class Hunt:
         self.ledger_path.write_text(json.dumps(self.ledger, indent=1))
 
     def left(self) -> float:
-        return self.a.hours * 3600 - (time.time() - self.t0)
+        return self.a.hours * 3600 - (time.monotonic() - self.t0)
 
     def cards(self) -> list[dict]:
         idx = rule_targets.OUT / "index.json"
@@ -338,7 +338,7 @@ class Hunt:
                 st["status"] = "retired"
             self.save()
         log(self.dir, f"stop: {self.ledger['llm_calls']} LLM calls, {len(self.ledger['candidates'])} candidates, "
-                      f"{(time.time() - self.t0) / 3600:.2f} h")
+                      f"{(time.monotonic() - self.t0) / 3600:.2f} h awake")
 
 
 def gen_runner_edges() -> list[str]:
