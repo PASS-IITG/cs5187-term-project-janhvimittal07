@@ -135,5 +135,18 @@
    "(1701411834604692317316873037158841057(2[89]|[3-9]\\d)|17014118346046923173168730371588410[6-9]\\d{2}|1701411834604692317316873037158841[1-9]\\d{3}|170141183460469231731687303715884[2-9]\\d{4}|17014118346046923[2-9]\\d{21}|1701411834604692[4-9]\\d{22}|170141183460469[3-9]\\d{23}|17014118346047\\d{24}|1701411834605\\d{25}|170141183461\\d{26}|17014118347\\d{27}|1701411835\\d{28}|170141184\\d{29}|17014119\\d{30}|1701412\\d{31}|170142\\d{32}|17015\\d{33}|1702\\d{34}|171\\d{35}|1[89]\\d{37}|[2-3]\\d{38})"
   ],
   "family_regex": "uhugeint"
+ },
+ {
+  "issue": 28542,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-08 (needs triage); found by hunt1",
+  "title": "ComparisonSimplificationRule moves TRY_CAST(date AS TIMESTAMP) to the constant side like a CAST: dates outside the timestamp range give false/true instead of NULL (any comparison operator, midnight or not)",
+  "switch_regex": "expression_rewriter",
+  "script_regex_all": [
+   "try_cast\\s*\\(\\s*[a-z_][\\w.]*\\s+as\\s+timestamp(_s|_ms|_ns|tz)?\\s*\\)",
+   "date\\s*'(29424[7-9]|2942[5-9]\\d|294[3-9]\\d\\d|29[5-9]\\d{3}|[3-9]\\d{5}|\\d{7,}|29031\\d|2903[2-9]\\d|290[4-9]\\d\\d|29[1-9]\\d{3})-[^']*'"
+  ],
+  "family_regex": "try_cast\\s*\\("
  }
 ]
