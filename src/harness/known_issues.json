@@ -174,5 +174,33 @@
    "contains\\s*\\([^;]*,\\s*(''|lower\\s*\\(\\s*''\\s*\\)|''::varchar)"
   ],
   "family_regex": "contains\\s*\\("
+ },
+ {
+  "issue": 28565,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-09; found by hunt1",
+  "title": "RemoveUnusedColumns pushes a cast of a STRUCT field into the scan, ignoring a CASE guard: spurious conversion error",
+  "switch_regex": "unused_columns",
+  "script_regex_all": [
+   "\\bcase\\s+when\\b",
+   "::\\s*[a-z]+|\\bcast\\s*\\(",
+   "struct"
+  ],
+  "family_regex": "struct"
+ },
+ {
+  "issue": 28566,
+  "ours": true,
+  "kind": "wrong_result",
+  "status": "open, filed 2026-11-09; found by hunt1",
+  "title": "unused_columns: both sides of a LIST join key merged into one column for [0.0] vs [-0.0]",
+  "switch_regex": "unused_columns",
+  "script_regex_all": [
+   "\\bjoin\\b",
+   "-0\\.0",
+   "\\[\\]"
+  ],
+  "family_regex": "\\bjoin\\b.*-0\\.0"
  }
 ]
