@@ -69,9 +69,19 @@ std::string result_to_json(const QueryResult &r) {
     return out;
 }
 
+// assert_true() raises the ordinary user error "Invalid Input Error: Assertion failed"; that is not an internal assertion
+static bool has_internal_assertion(const std::string &err) {
+    static const std::string user_prefix = "Invalid Input Error: ";
+    for (size_t pos = err.find("Assertion failed"); pos != std::string::npos; pos = err.find("Assertion failed", pos + 1)) {
+        if (pos < user_prefix.size() || err.compare(pos - user_prefix.size(), user_prefix.size(), user_prefix) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string classify_error_string(const std::string &err) {
-    if (err.find("INTERNAL Error") != std::string::npos ||
-        err.find("Assertion failed") != std::string::npos ||
+    if (err.find("INTERNAL Error") != std::string::npos || has_internal_assertion(err) ||
         err.find("Assertion `") != std::string::npos) {
         return "internal_error";
     }

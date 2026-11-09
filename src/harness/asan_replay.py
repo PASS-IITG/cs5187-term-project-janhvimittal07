@@ -29,7 +29,7 @@ import runner  # noqa: E402
 
 INTERESTING = ("internal_error", "asan", "crash")
 # mined reproducers sometimes contain pasted error text; a parser error then echoes it and classify() sees "INTERNAL Error"
-ECHO = re.compile(r"INTERNAL Error|Assertion failed|Assertion `|Assertion triggered|AddressSanitizer|runtime error:")
+ECHO = re.compile(r"INTERNAL Error|(?<!Invalid Input Error: )Assertion failed|Assertion `|Assertion triggered|AddressSanitizer|runtime error:")
 RESOURCE = re.compile(r"hard rss limit|rss limit exhausted|out-of-memory|requested allocation size|allocator is out of memory|"
                       r"allocation-size-too-big|exceeds maximum supported size|failed to allocate|cannot allocate memory|"
                       r"Out of Memory Error|\bKilled\b", re.I)

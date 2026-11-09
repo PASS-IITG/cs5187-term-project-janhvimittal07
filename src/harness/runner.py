@@ -10,8 +10,13 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# DuckDB's default TimeZone follows the process: keep results independent of the user's shell (children inherit this)
+os.environ["TZ"] = "UTC"
+time.tzset()
 
 WORK = Path(os.environ.get("FUZZ_WORK", Path(__file__).resolve().parent.parent))  # duckdb/, build-*/, corpus/, results/
 BUILDS = {
@@ -27,8 +32,9 @@ DRIVERS = {
 
 INTERESTING = {"internal_error", "asan", "crash", "timeout"}
 
+# assert_true() raises the user error "Invalid Input Error: Assertion failed"; only a bare "Assertion failed" is internal
 _ERR_KINDS = [
-    ("internal_error", re.compile(r"INTERNAL Error|Assertion failed|Assertion `")),
+    ("internal_error", re.compile(r"INTERNAL Error|(?<!Invalid Input Error: )Assertion failed|Assertion `")),
     ("parse_error", re.compile(r"Parser Error|Syntax error")),
     ("binder_error", re.compile(r"Binder Error|Catalog Error")),
     ("runtime_error", re.compile(r"(Conversion|Out of Range|Invalid Input|Constraint|"
