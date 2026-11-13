@@ -9,16 +9,16 @@
 \node[m, right=of a] (b) {\textbf{B} Feature fuzzers\\triggers, LATERAL,\\delim-join rewrite};
 \node[m, right=of b] (cc) {\textbf{C} Hints + LLM\\generators: new code,\\feature cards, dossiers};
 \node[m, right=of cc] (d) {\textbf{D} Rule-targeted loop\\rule cards, hypothesis,\\LLM generator};
-\node[c, below=10mm of a] (j) {\circled{1} Engine judge\\validity, reach, plans};
-\node[c, right=of j] (o) {\circled{2} Oracles\\switch on/off, 5 configs};
-\node[c, right=of o] (t) {\circled{3} Triage\\verify, registry,\\minimize, main, search};
-\node[c, right=of t] (h) {\circled{4} Person reads,\\files issue / PR};
+\node[c, below=10mm of a] (j) {\textbf{1} Engine judge\\validity, reach, plans};
+\node[c, right=of j] (o) {\textbf{2} Oracles\\switch on/off, 5 configs};
+\node[c, right=of o] (t) {\textbf{3} Triage\\verify, registry,\\minimize, main, search};
+\node[c, right=of t] (h) {\textbf{4} A person reads\\and files issue / PR};
 \draw[->] (j) -- (o); \draw[->] (o) -- (t); \draw[->] (t) -- (h);
-\foreach \x in {a,b,cc,d} { \draw[->] (\x.south) -- ++(0,-4mm) -| (o.north); }
-\draw[->, dashed] (j.north) -- ++(0,3mm) -| node[pos=0.25, above, font=\scriptsize]{engine feedback (repair rounds)} (d.south);
+\foreach \x in {a,b,cc,d} { \draw[->] (\x.south) -- ++(0,-5mm) -| (j.north); }
+
 \end{tikzpicture}
 \caption{\tool: four fuzzing methods run side by side and share one core. Generators written by an LLM (Methods C and D)
-pass the engine judge \circled{1} first, which also returns measured feedback for the next round of Method D. Every hit
+pass the engine judge (box 1) first, which also returns measured feedback for the next round of Method D. Every hit
 goes through the same oracles and triage, and a person decides what is filed.}
 \label{fig:overview}
 \end{figure}
