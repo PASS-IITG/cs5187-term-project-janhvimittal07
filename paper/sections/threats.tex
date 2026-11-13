@@ -1,16 +1,24 @@
 \section{Threats to Validity}
 \label{sec:threats}
-%% Internal / External / Construct. For each threat: what it is, what we did
-%% about it (itemize if several guards), what remains. Report non-determinism
-%% and LLM run-to-run variation with numbers.
-\focus{\textbf{Threats to validity.} Be honest about what could make your
-  conclusions wrong. Cover all three kinds below. For each: name the threat,
-  say what you did to reduce it (itemise the guards), and what still remains.
-  Report any non-determinism or run-to-run variation with numbers. Graded on
-  honesty, not on having zero threats.}
 
-\paragraph{Internal threats.} \todo{}
+\paragraph{Internal validity.} A difference between two configurations can come from the oracle, not the database:
+ties under \texttt{ORDER BY}, unordered \texttt{LIMIT}, \texttt{any\_value}, row identifiers, floating-point noise near
+zero, or a time-zone dependence. Each new generator's first hits were usually such oracle errors. We reduce this risk by
+the generator contract (unique sort keys), result normalization, replay in a fresh process, minimization that keeps the
+verdict, and a person who decides which side is right by reading the rule's code before filing. Upstream confirmation
+is the final check: 11 of 16 issues are labelled reproduced and 4 are fixed. The method that found each bug is taken
+from our notes and run logs; for the issues found before the automated loop existed, the attribution is ours and was
+not measured. One early bug that we first believed new had been fixed upstream the same day (PR \#28405); we caught it
+before filing because triage checks the newest development build, but such races can recur.
 
-\paragraph{External threats.} \todo{Subjects, platform, versions.}
+\paragraph{External validity.} We tested one database, DuckDB, and mostly one release, 2.0.0, which was new during
+our project. A new major release probably contains more optimizer bugs than a mature one, so our yield may not transfer
+to older or more heavily tested systems. Most bugs belong to one family, so the results say little about other bug
+classes such as concurrency or storage bugs. The LLMs we used change over time, and a later model may behave
+differently on the same prompts.
 
-\paragraph{Construct threats.} \todo{Does the metric measure what we claim?}
+\paragraph{Construct validity.} We count \emph{filed issues}, not confirmed root causes. An issue that maintainers
+later close as expected behaviour would reduce the count; none has been so far. Coverage numbers come from one round of
+Method C and measure lines, which predict bug finding only weakly. Reach is measured by a plan change, which shows that
+the rewrite fired but not that it fired in the interesting way. Our cost measure counts LLM calls, not tokens or wall
+time, because the runs were interrupted by usage limits and by the machine sleeping.

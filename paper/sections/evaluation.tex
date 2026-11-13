@@ -1,77 +1,161 @@
 \section{Evaluation}
-\label{sec:eval}
-%% Structure (keep): RQ list -> Subjects -> Baselines -> Measurements
-%% -> Setup -> one \subsection per RQ with Observations.
-%% Each RQ is a plain question a practitioner would ask.
+\label{sec:evaluation}
 
-\focus{\textbf{Research questions.} State 2--4 questions a practitioner would
-  actually ask. Each is a plain yes/no or how-much question you can answer
-  with a measurement --- not ``Is our tool good?''. Cover: does it work
-  (\rqref{1}), is it better than a simpler baseline (\rqref{2}), does it
-  change the outcome for a user (\rqref{3}), and what does it cost
-  (\rqref{4}). Every RQ must be answered later by an \texttt{observation}
-  box backed by a number. This is graded.}
-
-We ask \todo{n} questions.
-\begin{itemize}
-  \item[\rqref{1}] \todo{Question?}
-  \item[\rqref{2}] \todo{Question, compared with simpler baselines?}
-  \item[\rqref{3}] Do static boundary hints identify uncovered code regions and risky program sinks?
-  \item[\rqref{4}] What does \tool cost in time \todo{and resources}?
-\end{itemize}
-
-\subsection{Subjects}
-\label{sec:subjects}
-%% Selection criteria as an enumerate; exact versions/commits; why these.
-We select \todo{n} subjects with the following criteria:
-\begin{enumerate}
-  \item \todo{criterion, with the reason};
-\end{enumerate}
-
-\subsection{Baselines}
-\label{sec:baselines}
-%% description list; each baseline: what it is, why it is a fair comparison.
+We answer four research questions.
 \begin{description}
-  \item[Default.] \todo{}
+  \item[\rqref{1} Effectiveness.] How many previously unknown bugs does \tool find in DuckDB~2.0.0, of which kinds, and
+        how do maintainers respond?
+  \item[\rqref{2} Methods.] What does each of the four methods contribute, and at what cost?
+  \item[\rqref{3} Judge.] Does the engine judge separate generators that exercise their target from generators that
+        only claim to?
+  \item[\rqref{4} Loop.] How efficient is the unattended rule-targeted loop, from LLM calls to filed issues?
 \end{description}
 
-\subsection{Measurements}
-\begin{description}
-  \item[\rqref{1}.] \todo{What exactly is measured.}
-  \item[\rqref{3}.] Fraction of extracted static boundary hints located on lines uncovered by the baseline seed corpus, broken down by category and subsystem.
-\end{description}
+\paragraph{Setup.} All runs of Methods A, B and D and the Claude arm of Method C used one laptop: an Intel Core
+i3-1315U (8 hardware threads), 7.4\,GB of RAM under WSL2 (Linux 6.18), Python~3.14.4 and the released DuckDB~2.0.0
+(source tag \texttt{v2.0.0}); Method A on DuckDB~1.5.6 and~2.0.0 used our own sanitizer builds. The LLM of Method D was
+Claude Code~2.1.323 with Claude Opus for the first round of each target and Claude Sonnet for repair rounds, on a
+personal subscription. Round~2 of Method C ran on a team member's machine with Gemini~2.5~Pro. Workers ran one at a
+time with a DuckDB memory limit, because larger settings froze the machine. Every number in this section is produced
+by \texttt{paper/scripts/collect\_data.py} and \texttt{collect\_extra.py} from run logs and from the GitHub state of our
+issues on 13~November~2026; the outputs are in \texttt{paper/data}.
 
-\subsection{Setup}
-%% Machine, OS, compiler/tool versions, time limits, repetitions.
-\todo{Machine, versions, repetitions.}
+\subsection{RQ1: Bugs Found}
+\label{sec:eval-bugs}
 
-\subsection{\rqref{1}: \todo{Short question}}
-\label{sec:rq1}
-\todo{Table/figure first, then text that reads it.}
+\input{tables/tab_issues}
+
+Table~\ref{tab:issues} lists the 16 issues we filed between 23~October and 9~November~2026; a team member filed one
+(\#27904) and another team member filed the rest. Each issue has a minimized reproducer, the affected versions, and the
+result with the responsible switch turned off. By kind, 8 are silent wrong results, 5 are internal errors, and 3 are
+spurious errors on valid queries. Two of the internal errors are severe: \#28532 invalidates the whole database, so
+every later query in the session fails, and \#27759 aborts a trigger cascade.
+
+Maintainers have fixed 4 issues: \#28052 (PR \#28071), \#27850 (PR \#28144), \#28562 (PR \#28563) and \#27759
+(PR \#28698, which also fixes a related wrong result; DuckDB's lead developer closed the issue). For 9
+more issues a fix pull request is open; 8 of them were written by maintainers or other contributors after reading our
+report, and one (\#28547 for \#28531) is ours. DuckDB's bot labelled 11 of the 16 issues as \emph{reproduced}. None was
+closed as a duplicate or as expected behaviour.
+
+The bugs cluster in one family: constants at the limits of their type inside optimizer rewrites. The rewrite builds a
+new value (a bound, a moved constant, a cast) and that value overflows, wraps or loses a NaN or a sign. In \#28541, a UHUGEINT constant above the HUGEINT maximum silently wraps when it is moved across \texttt{=}. In \#28534, a \texttt{date\_trunc} bound lies one step past the last valid timestamp. In \#28559 and \#28566, the signed zero makes \texttt{[0.0] = [-0.0]} true although the two values print differently.
 
 \begin{observation}
-\label{obs:first}
-\todo{One claim, with the number that supports it.}
+\tool found 16 previously unknown bugs in DuckDB~2.0.0, half of them silent wrong results. Maintainers fixed 4 within three weeks and fix pull requests exist for 9 more; none was rejected.
 \end{observation}
 
-\subsection{\rqref{3}: Static Boundary Hints in Uncovered Code}
-\label{sec:rq3}
+\subsection{RQ2: What Each Method Contributes}
+\label{sec:eval-methods}
 
-\input{tables/tab_rq3_hints}
+\begin{table}[t]
+\caption{What each method ran and what it found. \emph{Work}: tests executed or LLM calls spent. \emph{New}: issues
+filed that were previously unknown. Method A ran first on DuckDB~1.5.6 and later on~2.0.0; all its real findings were
+already known upstream.}
+\label{tab:methods}
+\footnotesize\centering
+\begin{tabular}{lp{4.4cm}p{4.6cm}rr}
+\toprule
+Method & Input and LLM & Work & New & Fixed \\
+\midrule
+A classic & none & 70{,}980 SQLsmith queries (92.3\% valid); 11{,}235 differential queries; 14{,}000 sanitizer runs & 0 & 0 \\
+B features & hand-written fuzzers for new 2.0 features & trigger, window, join, bottom-up and delim-join fuzzers & 1 & 1 \\
+C hints + LLM & static and new-code hints, feature cards, dossiers; 1.5B local model, Gemini~2.5~Pro, Claude &
+  Gemini Round~2: 12 generators, 36{,}600 cases, 122{,}590 valid queries; Claude arm & 3 & 2 \\
+D rule loop & rule cards; Claude Opus and Sonnet & interactive session; loop runs \texttt{smoke1} (2 calls) and
+  \texttt{hunt1} (40 calls) & 12 & 1 \\
+\midrule
+Total & & & 16 & 4 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-Table~\ref{tab:rq3_hints} reports the distribution and execution status of static boundary hints across the five core DuckDB subsystems.
-Our static analysis extracted 24{,}816 hints across 818 C++ source files (187{,}969 lines of code).
-Of these hints, 24{,}065 reside on lines with compiler coverage instrumentation.
-The baseline seed corpus executes 4{,}587 of these hints (19.1\%).
-The remaining 19{,}478 hints (80.9\%) sit on lines never reached by the seed corpus.
+Table~\ref{tab:methods} compares the methods. \textbf{Method A} found real failures but no new bug. A differential
+sweep of 11{,}235 queries over DuckDB's own tests on DuckDB~1.5.6 surfaced two crashes, both already reported and fixed
+upstream; a sanitizer hunt over 14{,}000 runs produced 109 hits with 22 distinct signatures, all of them known bugs or
+expected behaviour; and a 45-minute SQLsmith campaign of 70{,}980 queries on the 2.0.0 sanitizer build produced 46 raw
+anomalies and no new bug. This is the gap that motivated the other methods: generic fuzzing re-finds what upstream's
+own fuzzers already find.
 
-Looking across hint categories, 1{,}798 of 2{,}290 instrumented sinks (78.5\%) remain unexecuted.
-These unexecuted sinks include assertion checks (\texttt{D\_ASSERT}), memory copies (\texttt{memcpy}), and numeric downcasts.
-Similarly, 9{,}780 of 12{,}381 comparison branches (79.0\%) and 7{,}900 of 9{,}394 boundary constants (84.1\%) remain unexecuted.
-Across subsystems, coverage of hints ranges from 11.9\% in \texttt{function} to 31.9\% in \texttt{optimizer}.
-Because four-fifths of all static boundary hints sit in unexecuted code, they provide concrete targets for directed query generation.
+\textbf{Method B} found our first new bug: the trigger fuzzer found \#27759, an internal error when a
+\texttt{FOR EACH ROW} trigger inserts into a table that has a \texttt{BEFORE INSERT} trigger. Triggers were new in
+DuckDB~2.0 and rarely appeared in upstream reports.
+
+\textbf{Method C} found three bugs (\#27850, \#27904, \#28052), two of them now fixed. Its results depend strongly on
+the model. In the pilot with a local 1.5B-parameter model, 72 of 126 guided queries were valid (57\%) and none of 10
+targeted code regions was reached. Gemini~2.5~Pro in Round~2 wrote 12 generators that passed the audit and ran
+122{,}590 valid queries without a new bug; its four candidates were two sanitizer-only failures already fixed upstream
+and two that did not reproduce. The same round shows the cost of directing: the directed generators covered 17.89\% of
+DuckDB's 160{,}389 instrumented lines, against 38.64\% for the baseline corpus, because each generator stays close to
+one target.
+
+\textbf{Method D} found 12 of the 16 bugs: 5 in an interactive session in which Claude read the optimizer source and its fix history with a person in the loop, and 7 in the unattended loop. Rule cards automate what this session did by hand. These 7 came from 42 LLM calls (Section~\ref{sec:eval-loop}).
 
 \begin{observation}
-\label{obs:rq3_hints}
-Static analysis identified 24{,}065 instrumented boundary hints across DuckDB. The baseline seed corpus leaves 19{,}478 of these hints (80.9\%) unexecuted, including 1{,}798 unreached program sinks.
+The methods are complementary. Generic fuzzing found no new bug, a feature fuzzer found the first one, and directing an
+LLM at single rules found 12 of 16. A larger model and a narrower target mattered more than more tests: Method C ran
+more than 120{,}000 queries in one round without a new bug, and Method D found 6 bugs with 40 calls.
+\end{observation}
+
+\subsection{RQ3: Does the Engine Judge Work?}
+\label{sec:eval-judge}
+
+\begin{table}[t]
+\caption{Controls of the judge and the triage. A control must reach its expected verdict after every change to them.
+\emph{Rule}/\emph{Expr.}: rule-level and expression-level reach rate. \emph{Re-found}: the issue that triage classified the
+control's hits as a rediscovery of.}
+\label{tab:controls}
+\footnotesize\centering
+\begin{tabular}{llrrrl}
+\toprule
+Control & Judge verdict & Rule & Expr. & Hits & Re-found \\
+\midrule
+cheat (names rule, never fires it) & rejected & 0.00 & 0.23 & 0 & -- \\
+positive (\texttt{date\_trunc}) & accepted & 0.33 & 0.55 & 8 & \#28527 \\
+session generator, arithmetic & rejected (diversity) & 0.59 & 0.59 & 8 & \#28535 \\
+session generator, cast comparison & rejected (diversity) & 0.11 & 0.40 & 12 & \#28532 \\
+session generator, \texttt{date\_trunc} edges & rejected (diversity) & 0.22 & 0.56 & 6 & \#28534 \\
+session generator, timestamp cast & rejected (diversity) & 0.35 & 0.58 & 2 & \#28531 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The judge exists because an LLM reports progress it did not make. In the first unattended Method~C run, 10 of 11
+generators written by an LLM agent produced exactly 8 queries per case and 5 to 12 distinct plans, and the run's only
+reported bug was our own \#27759 again. Our first judge counted SQL keywords instead of operators, which a red-team
+review showed could be satisfied without testing anything; we rebuilt it on operator trees from
+\texttt{EXPLAIN (FORMAT JSON)}.
+
+Table~\ref{tab:controls} shows the controls we run after every change. The negative control names the target rule but
+never gives it a bare column, so constant folding removes the call before the rule sees it. Its expression-level reach
+is 0.23, but its rule-level reach is 0.00, and the judge rejects it. The positive control is accepted and its hits are
+classified as rediscoveries of \#28527. The four session generators that found \#28531, \#28532, \#28534 and \#28535
+still re-find exactly their own bug, so the triage and the registry work end to end.
+
+The same table also shows a limit of the judge. All four session generators fail the diversity floor: they are narrow
+and deep, with few query skeletons, yet each found a real bug. For this reason Method D triages the hits of every
+generator. In \texttt{hunt1}, the judge accepted 23 of 32 rounds, and all 9 candidates came from accepted rounds; the rejected rounds produced 128 raw hits and no candidate.
+
+\begin{observation}
+Measured rule-level reach rejects a generator that only names its target, and controls that re-find our own bugs show
+the pipeline still works after every change. The diversity floor is a measure of coverage, not of bug-finding power:
+narrow generators can find bugs, so their hits must still be triaged.
+\end{observation}
+
+\subsection{RQ4: The Unattended Loop}
+\label{sec:eval-loop}
+
+\input{tables/tab_hunt1}
+
+Table~\ref{tab:hunt1} shows the run \texttt{hunt1}. It spent 40 LLM calls on 13 targets (12 of them ran at least one
+round), ran 32 generator rounds with a median valid rate of 95\%, and collected 597 raw hits. Triage looked at 138 hits, at most ten per round. It classified 56 as duplicates within the run and 54 as already fixed on the development build. Another 10 were low priority (the optimizer only hid an error), 8 were rediscoveries of known issues and 1 was an artifact. The remaining 9 were new candidates. A person read the 9 candidates: four were the same top-N bug, one was covered by an open upstream
+pull request, and six became issues. A short earlier run (\texttt{smoke1}, 2 calls) gave one more (\#28536). The run was started seven times; after a machine sleep, failed LLM calls and a usage limit, each start resumed from the ledger without repeating a completed round.
+
+Yield is uneven. Five of the 12 targets produced all the candidates, and they share a trait: the rule builds a new
+value, or it replaces one column with another that compares as equal. Rules whose queries rarely reach them
+(\texttt{in\_clause\_simplification\_rule}, \texttt{compressed\_materialization}) produced nothing. The triage step saved much work by dropping 54 hits whose bug was already fixed on the development build, for example top-N hits fixed by PR \#28405 two days before the run.
+
+\begin{observation}
+The loop turned 40 LLM calls into 6 new issues, about one issue per 7 calls, with a person reading only 9
+candidates out of 597 raw hits. Yield comes from a few targets that build values, so rotating targets helps more than
+longer runs on one target.
 \end{observation}

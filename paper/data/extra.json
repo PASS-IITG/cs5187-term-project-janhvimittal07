@@ -1,0 +1,25 @@
+{
+ "hunt1_triage_classes": {
+  "candidate_new": 9,
+  "duplicate_in_run": 56,
+  "fixed_on_main": 54,
+  "low_priority": 10,
+  "rediscovery": 8,
+  "artifact": 1
+ },
+ "hunt1_triaged_hits": 138,
+ "control_rediscoveries": {
+  "control_rule_arith_constants": [
+   "28535"
+  ],
+  "control_rule_cast_comparison": [
+   "28532"
+  ],
+  "control_rule_date_trunc_edges": [
+   "28534"
+  ],
+  "control_rule_timestamp_cast_date": [
+   "28531"
+  ]
+ }
+}

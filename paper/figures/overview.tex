@@ -1,23 +1,24 @@
-%% Figure: overview of the tool. Steps left to right, loop dashed.
-%% Grayscale-safe (black lines, black!6 fill), \scriptsize text, numbered
-%% steps matching the "Step N" subsections.
-\begin{tikzpicture}[
-    x=1cm, y=1cm, font=\scriptsize,
-    box/.style={draw, rounded corners=2pt, align=center, inner sep=2pt,
-                minimum height=9mm, text width=15mm, fill=white},
-    outbox/.style={draw, align=left, inner sep=2pt, fill=black!6,
-                text width=20mm, font=\tiny},
-    flow/.style={-{Stealth[length=1.6mm]}, line width=0.5pt},
-    back/.style={-{Stealth[length=1.6mm]}, line width=0.5pt, dash pattern=on 2pt off 1.5pt},
-  ]
-  \node[box, text width=10mm] (in) at (0,0) {input};
-  \node[box] (s1) at (1.8,0) {\textbf{1} step one};
-  \node[box] (s2) at (3.8,0) {\textbf{2} step two};
-  \node[box] (s3) at (5.8,0) {\textbf{3} step three};
-  \node[outbox] (o) at (3.8,-1.6) {output one\\output two};
-  \draw[flow] (in) -- (s1);
-  \draw[flow] (s1) -- (s2);
-  \draw[flow] (s2) -- (s3);
-  \draw[flow] (s3.south) |- (o.east);
-  \draw[back] (s3.north) -- ++(0,0.35) -| node[pos=0.25, above] {repeat} (s2.north);
+%% Figure: overview of SLDF. Four methods (top) feed one shared core (bottom).
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\footnotesize, node distance=4mm,
+  m/.style={draw, rounded corners, align=center, minimum height=11mm, text width=27mm},
+  c/.style={draw, rounded corners, align=center, minimum height=9mm, text width=24mm, fill=black!6},
+  >={Stealth[length=2mm]}]
+\node[m] (a) {\textbf{A} Classic fuzzing\\SQLsmith, sweeps,\\issue replay};
+\node[m, right=of a] (b) {\textbf{B} Feature fuzzers\\triggers, LATERAL,\\delim-join rewrite};
+\node[m, right=of b] (cc) {\textbf{C} Hints + LLM\\generators: new code,\\feature cards, dossiers};
+\node[m, right=of cc] (d) {\textbf{D} Rule-targeted loop\\rule cards, hypothesis,\\LLM generator};
+\node[c, below=10mm of a] (j) {\circled{1} Engine judge\\validity, reach, plans};
+\node[c, right=of j] (o) {\circled{2} Oracles\\switch on/off, 5 configs};
+\node[c, right=of o] (t) {\circled{3} Triage\\verify, registry,\\minimize, main, search};
+\node[c, right=of t] (h) {\circled{4} Person reads,\\files issue / PR};
+\draw[->] (j) -- (o); \draw[->] (o) -- (t); \draw[->] (t) -- (h);
+\foreach \x in {a,b,cc,d} { \draw[->] (\x.south) -- ++(0,-4mm) -| (o.north); }
+\draw[->, dashed] (j.north) -- ++(0,3mm) -| node[pos=0.25, above, font=\scriptsize]{engine feedback (repair rounds)} (d.south);
 \end{tikzpicture}
+\caption{\tool: four fuzzing methods run side by side and share one core. Generators written by an LLM (Methods C and D)
+pass the engine judge \circled{1} first, which also returns measured feedback for the next round of Method D. Every hit
+goes through the same oracles and triage, and a person decides what is filed.}
+\label{fig:overview}
+\end{figure}

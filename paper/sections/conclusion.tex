@@ -1,8 +1,11 @@
 \section{Conclusion}
 \label{sec:conclusion}
-%% Two short paragraphs. (1) The problem again in 2-3 sentences with the key
-%% number. (2) "We presented \tool, which ..." + the main results with the
-%% same numbers as the abstract. No new claims, no new numbers, no hype.
-\todo{Problem and key number.}
 
-We presented \tool, which \todo{}.
+We presented \tool, four fuzzing methods for DuckDB that share one engine judge, one oracle layer and one triage
+pipeline. Generic fuzzing found no new bug; a fuzzer for a new feature found the first one; LLM-written generators guided
+by hints found three; and the rule-targeted loop, which mines rule cards from source and fix history and lets the
+database judge an LLM's generators, found twelve. In total we filed 16 issues on DuckDB~2.0.0, 8 of them silent wrong
+results; 4 are fixed and 9 more have open fix pull requests. The main lesson is that an LLM becomes a useful fuzzer
+author when its claims are replaced by measurements from the system under test, and when every hit is still triaged by
+the same pipeline. Next, we plan to add TLP, NoREC and cross-version oracles, coverage of target lines as a second reach
+signal, and adapters for PostgreSQL and SQLite-compatible engines.

@@ -1,44 +1,88 @@
 \section{Introduction}
 \label{sec:intro}
-%% Paragraph plan (each paragraph = one job; keep to this order):
-%%  P1  Concrete scenario the reader knows: "Suppose you want to ...".
-%%      State what existing tools need or do, with citations.
-%%  P2  The first/known problem and who already works on it (cite).
-%%      End with where they stop: "These tools stop when ...".
-%%  P3  OUR problem, in plain words: "We focus on a second problem that
-%%      starts where they stop: ...". Why it is silent/dangerous.
-%%  P4  A real example with exact numbers, pointing to a figure
-%%      (Figure~\ref{fig:motivating}). Then "This is not a single case." + count.
-%%  P5  Prior work on the closest idea and its precise gap
-%%      ("However, they need ...", "Their method depends on ...").
-%%  P6  "We bring/We present \tool ..." + numbered steps (enumerate), each
-%%      step one sentence, each pointing to its section. Then list outputs.
-%%  P7  First results with numbers, and one lesson learned.
-%%  Contributions (itemize), each item ending in (Section~\ref{...}).
 
-\todo{P1: scenario.}
+Suppose a data analyst filters a table of measurements with \texttt{WHERE -d > 'nan'::DOUBLE}. The database plans the
+query, its optimizer rewrites the predicate into a cheaper form, and the analyst receives rows. Nothing fails and no
+warning appears. If the rewrite was wrong, the analyst has no way to notice. Database testing tools such as
+SQLancer~\cite{rigger2020tlp,rigger2020norec} and grammar-based fuzzers such as SQLsmith~\cite{sqlsmith} and
+Squirrel~\cite{zhong2020squirrel} were built for this class of \emph{logic bug}. They generate many queries and compare
+each answer with an answer that should be equal.
 
-\focus{\textbf{Motivating example.} Give one \emph{real} case (a bug report,
-  a CVE, a failing test, a slow build, a measured number) that shows the
-  problem is real and worth solving. Point to Figure~\ref{fig:motivating},
-  use exact numbers, then add one sentence proving it is not a one-off
-  (``This is not a single case.'' + a count). This is graded: no toy or
-  imaginary example.}
+These tools work best on code that random queries reach often. An optimizer, however, is a long list of small rewrite
+rules, and each rule fires only under narrow conditions: a constant of a specific type, a cast next to a comparison, a
+join key of a list type. A rule that fires on one query in ten thousand is tested rarely, and its edge cases (type
+limits, signed zero, NaN) more rarely still. A second problem is timing. Projects such as
+DuckDB~\cite{raasveldt2019duckdb} are fuzzed continuously by their developers and by other researchers, so a bug found
+in a release is often already fixed on the development branch. In our first month, every real bug our tools found in
+DuckDB~1.5.6 had already been reported or fixed upstream (Section~\ref{sec:eval-methods}).
+
+We focus on a third problem that starts where these tools stop: \emph{directing} the search at one optimizer rule at a
+time, and proving that the generated tests actually exercise that rule. Large language models (LLMs) can read source
+code and write programs, which makes directed generation possible~\cite{yang2024whitefox,xia2024fuzz4all}. But an LLM
+also reports success it did not achieve. In an early run of our pipeline, 10 of 11 generators that an LLM agent wrote
+and described as thorough produced exactly 8 queries per case and 5 to 12 distinct plans
+(Section~\ref{sec:eval-judge}).
+
+\paragraph{A real example.} Figure~\ref{fig:motivating} shows issue \#28052, which one of our LLM-written generators
+found in DuckDB~2.0.0. DuckDB orders NaN above every other value, so \texttt{-d > NaN} is false for every row. The rule
+\texttt{MoveUnaryMinusRule} rewrites \texttt{-x > c} into \texttt{x < -c}. Its guard handles a NaN \emph{column value}
+but not a NaN \emph{constant}, so the query returns all 4 rows instead of none. With the expression rewriter switched
+off, DuckDB returns the correct empty result, and DuckDB~1.5.6 was also correct. The maintainers merged a fix one day
+after we filed (PR \#28071). This is not a single case: 8 of the 16 issues we filed are silent wrong results
+(Table~\ref{tab:issues}).
+
+\begin{figure}[t]
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,columns=fullflexible]
+CREATE TABLE f(d DOUBLE);
+INSERT INTO f VALUES (1.5), (-2.5), ('nan'), ('inf');
+SELECT d FROM f WHERE -d > 'nan'::DOUBLE ORDER BY d;
+  -- DuckDB 2.0.0:  -2.5, 1.5, inf, nan     (4 rows, wrong)
+  -- expected:      no rows                  (NaN is the largest value)
+SET disabled_optimizers = 'expression_rewriter';
+SELECT d FROM f WHERE -d > 'nan'::DOUBLE ORDER BY d;   -- no rows (correct)
+\end{lstlisting}
+\caption{Issue \#28052, found by an LLM-written generator. One rewrite rule turns an always-false predicate into an
+always-true one. No error is raised; only a second run with the rule switched off shows the difference.}
+\label{fig:motivating}
+\end{figure}
+
+Closest to our work, WhiteFox~\cite{yang2024whitefox} lets an LLM read compiler optimization code and write tests for
+it, and directed greybox fuzzing~\cite{bohme2017aflgo} steers inputs toward chosen code locations. However, WhiteFox
+targets compilers and trusts the LLM's description of what triggers an optimization, and directed greybox fuzzers need
+distances over a control-flow graph, which is costly to compute for a large C++ database. Neither checks with the
+database itself that a generated SQL test fired the intended rewrite.
+
+\paragraph{Our approach.} We present \tool (Semantic LLM-Directed Fuzzing), a framework of four methods that run side
+by side on the same infrastructure (Section~\ref{sec:approach}):
+\begin{enumerate}
+  \item \textbf{Method A, classic fuzzing}, as a baseline and safety net: SQLsmith on a sanitizer build, differential
+        sweeps of DuckDB's own tests, and replay of past bug reports (Section~\ref{sec:method-a}).
+  \item \textbf{Method B, feature-targeted fuzzers} for features that are new in DuckDB~2.0, such as triggers
+        (Section~\ref{sec:method-b}).
+  \item \textbf{Method C, new-code hints and LLM-written generators}: the LLM receives hints about code that is new or
+        never executed, feature cards and fix dossiers, and writes a generator program (Section~\ref{sec:method-c}).
+  \item \textbf{Method D, the rule-targeted loop}: a \emph{rule card} per optimizer rule, mined from its source and fix
+        history, a hypothesis-first LLM generator, and an \emph{engine judge} that accepts the generator only if the rule
+        fires on its queries (Section~\ref{sec:method-d}).
+\end{enumerate}
+All four methods feed one oracle layer and one triage pipeline. A person reads every surviving candidate before
+anything is filed.
+
+\paragraph{Results.} Over five weeks we filed 16 issues on DuckDB~2.0.0. Maintainers fixed 4 (\#27759, \#27850,
+\#28052, \#28562), 9 more have open fix pull requests, and one of those (\#28547) is ours. Method D found 12 of the 16.
+One unattended run of Method D spent 40 LLM calls on 13 targets, ran 32 generator rounds and turned 597 raw differences
+into 9 triaged candidates and 6 issues (Table~\ref{tab:hunt1}). The main lesson is that the LLM is useful only when the
+engine checks its work, and that the check must not be the only gate: four generators that found bugs failed our own
+diversity floor, so we triage the hits of every generator but count only judged generators as test coverage.
 
 \paragraph{Contributions.}
 \begin{itemize}
-  \item We define \todo{concept} (Section~\ref{sec:problem}).
-  \item We present \tool, which \todo{what} (Section~\ref{sec:approach}).
-  \item We evaluate \tool on \todo{n} \todo{subjects} (Section~\ref{sec:eval}).
-  \item We release the tool and all data (Section~\ref{sec:data}).
+  \item A framework of four complementary fuzzing methods for a database optimizer that share one judge, one oracle
+        layer and one triage pipeline (Section~\ref{sec:approach}).
+  \item Rule cards: per-rule targets mined from source code and fix history, including the early exits under which a
+        rewrite fires and the places where it builds values (Section~\ref{sec:method-d}).
+  \item An engine judge that measures rule-level reach and rejects generators that only claim it, checked by positive
+        and negative controls (Sections~\ref{sec:judge} and~\ref{sec:eval-judge}).
+  \item 16 upstream issues on DuckDB with minimal reproducers, 4 of them fixed, and one fix pull request
+        (Section~\ref{sec:evaluation}). All code and data are public (Section~\ref{sec:data}).
 \end{itemize}
-
-\begin{figure}[t]
-\begin{lstlisting}[numbers=none,escapechar=@]
-// the real code / input that shows the problem, trimmed with ...
-\end{lstlisting}
-\caption{\textcolor{red}{[Motivating example --- graded]} A real case of the
-  problem. \todo{The caption states the lesson, with the exact number, so a
-  reader who reads only captions gets it.}}
-\label{fig:motivating}
-\end{figure}

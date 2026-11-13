@@ -87,3 +87,33 @@ reproducers go in `crashes/`; summary numbers used in the paper go in
 `paper/data/`.
 
 See [`../docs/WORKPLAN.md`](../docs/WORKPLAN.md) for who does what and the task list.
+
+## Reproducing the paper (DuckDB 2.0.0)
+
+Tested on Ubuntu (WSL2), 8 hardware threads, 7.4 GB RAM, Python 3.14, DuckDB 2.0.0. Big files live outside the repo:
+
+```bash
+export FUZZ_WORK=$HOME/cs5187; PY=$FUZZ_WORK/.venv/bin/python
+python3 -m venv $FUZZ_WORK/.venv && $PY -m pip install --only-binary=:all: duckdb==2.0.0
+git clone https://github.com/duckdb/duckdb $FUZZ_WORK/duckdb && git -C $FUZZ_WORK/duckdb checkout v2.0.0   # source for rule cards / the LLM
+```
+
+| Method | What it is | Command |
+|---|---|---|
+| A classic | SQLsmith on an ASan build, differential sweeps, issue replay | `src/build.sh` (ASan build), then `$PY harness/fuzz.py all`, `$PY harness/campaign.py` |
+| B features | trigger / window / join / bottom-up fuzzers | `$PY harness/fuzz_triggers.py`, `fuzz_windows.py`, `fuzz_joins.py`, `bottomup.py` |
+| C hints + LLM | hints, feature cards, dossiers; LLM-written generators | `$PY harness/targeted_run.py --hours 12` (see `docs/RUNBOOK_TARGETED_RUN.md`) |
+| D rule loop | rule cards + hypothesis-first generators + engine judge | see below and `docs/HUNT_LOOP.md` |
+
+Method D (needs Claude Code logged in; the LLM gets read-only tools on the DuckDB source only):
+
+```bash
+$PY src/harness/rule_targets.py build                          # 49 rule cards -> $FUZZ_WORK/results/targeted/rule_cards/
+$PY src/harness/controls/check_controls.py --rediscovery       # must print CONTROLS PASSED
+src/harness/hunt_start.sh --run hunt1 --hours 8 --max-llm-calls 40   # detached, resumable; results/hunt/hunt1/
+```
+
+Check one reproducer: `$PY src/harness/verify_finding.py --diff path/to/script.sql`.
+
+Paper numbers and tables: `FUZZ_WORK=$HOME/cs5187 $PY paper/scripts/collect_data.py && $PY paper/scripts/collect_extra.py`
+(writes `paper/data/*` and `paper/tables/tab_issues.tex`, `tab_hunt1.tex`; needs `gh` for the live issue state).

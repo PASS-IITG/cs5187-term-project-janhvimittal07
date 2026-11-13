@@ -1,6 +1,28 @@
 \section{Discussion}
 \label{sec:discussion}
-%% Question-style paragraphs that answer what a reviewer will ask:
-%%   \paragraph{Is more X always better?} No. ...
-%% End limits with "We leave this for future work." -- do not hide them.
-\paragraph{\todo{Reviewer question}?} \todo{Short, honest answer.}
+
+\paragraph{What made directing work.} Three choices mattered most. First, targets came from code \emph{and} history:
+the bugs of Method D sit next to recent fixes (\#28541 is the UHUGEINT sibling of the UBIGINT bug \#28535, found one day later by the loop on the same rule). Second, the LLM had to state a hypothesis about a value the rule builds, which
+pushed it toward type limits, NaN and signed zero instead of generic queries. Third, the database judged the result.
+Without the judge, the LLM's own reports in Method C would have counted trivial generators as thorough.
+
+\paragraph{Why keep generic fuzzing?} Method A found no new bug, but it is the only method that looks for memory
+errors under sanitizers, and its results define the baseline: they show that the bugs of Methods B to D are not ones a
+generic fuzzer finds in the same time.
+
+\paragraph{Why not report every difference?} Most differences are not bugs. Of 138 triaged hits in \texttt{hunt1},
+only 9 were new candidates. Many of the rest are expected: when the unoptimized plan fails and the optimized plan
+succeeds, the optimizer only removed work whose error does not matter, which DuckDB accepts. Sending such reports would
+cost maintainers' time and our credibility. We also grouped bugs with one root cause into one issue and filed at a
+steady pace.
+
+\paragraph{Limits of the bug family.} Most of our bugs belong to one family: constants at type limits in optimizer
+rewrites. Yield per target falls once a rule's family is exhausted (Table~\ref{tab:hunt1}). New families need new
+oracles: TLP and NoREC can find bugs that are present with the switch both on and off, and a cross-version oracle
+(release against development build) finds regressions directly. Rules that match operators such as \texttt{+} or
+\texttt{LIKE} have no marker function, so their reach is measured only at expression level. Measuring the coverage of
+the target file's lines would give a stronger signal for them. We leave these for future work.
+
+\paragraph{Other database engines.} Nothing in the core is specific to DuckDB except the switch names, the marker
+functions and the build scripts. For PostgreSQL, the \texttt{enable\_*} planner settings play the role of switches; for
+an engine that aims to be compatible with SQLite, SQLite itself is a ready-made differential oracle.

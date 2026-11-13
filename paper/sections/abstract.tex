@@ -1,11 +1,12 @@
-%% ABSTRACT (150-250 words, one paragraph, no citations, no \ref).
-%% Pattern (from earlier papers):
-%%  1. The problem in 2-3 short sentences. Plain words; what tools do today.
-%%  2. Why it matters: ONE concrete, real case with an exact number
-%%     (e.g. a CVE, a miscompilation, a measured share).
-%%  3. "We present \tool." What it does, in steps, in one or two sentences.
-%%  4. Results with numbers: "On X, \tool ... from A\% to B\%."
-%%  5. One honest lesson or surprise the work taught ("The run also shows ...").
-%% No "novel", no "we propose a framework", no promises without numbers.
-\todo{Problem in two sentences.} \todo{One real case with a number.}
-We present \tool. \todo{What it does.} \todo{Results with numbers.}
+A query optimizer that rewrites a query wrongly returns a wrong answer without any error, so users have no reason to
+doubt it. Random SQL fuzzers rarely reach the narrow conditions under which a single rewrite rule fires, and a bug
+found in a released version is often already fixed in the development branch. We present \tool, a framework of four
+fuzzing methods for the DuckDB database that run side by side and share one execution judge, one oracle layer and one
+triage pipeline: (A) classic generic fuzzing as a baseline, (B) fuzzers aimed at features new in DuckDB~2.0, (C) test
+generators written by a large language model (LLM) and guided by new-code hints and fix dossiers, and (D) a
+rule-targeted loop. Method D mines a \emph{rule card} for each optimizer rule from its source code and fix history,
+asks the LLM for a bug hypothesis and a generator program, and accepts the generator only if executing it shows that
+the target rule fired. With these methods we filed 16 issues on DuckDB~2.0.0: 8 silent wrong results, 5 internal
+errors and 3 spurious errors. Maintainers have fixed 4 of them, 9 more have open fix pull requests (one of them ours),
+and Method D alone found 12. One unattended run of Method D spent 40 LLM calls on 13 targets and produced 9 candidates
+that became 6 issues. Generic fuzzing with 70{,}980 SQLsmith queries found no new bug.

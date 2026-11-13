@@ -1,28 +1,123 @@
 \section{Approach}
 \label{sec:approach}
-%% Start with the figure and the main idea in 2-3 sentences.
-%% One \subsection per step, titled "Step N: ..." matching the figure numbers.
-%% Say what is NOT new: "We do not claim this step as new. Everything after it is."
-%% Lists of actions use (i)~...; (ii)~...; inline.
 
-\focus{\textbf{Workflow.} Show how your method works end to end. Start with
-  the overview figure (Figure~\ref{fig:overview}) and state the main idea in
-  2--3 sentences: what goes in, what comes out, what loops, what is
-  expensive. Then one \texttt{\textbackslash subsection} per numbered box in
-  the figure --- the step numbers in the text must match the figure. Say
-  plainly which steps are yours and which you reuse (``We do not claim this
-  step as new'').}
+\input{figures/overview}
 
-Figure~\ref{fig:overview} shows the steps of \tool. The main idea is
-\todo{one sentence}.
+\tool consists of four fuzzing methods and one shared core (Figure~\ref{fig:overview}). The methods differ in
+\emph{where} they look and \emph{who} writes the tests. The core decides \emph{whether} a test is meaningful and
+\emph{whether} a difference is a bug. We ran the methods side by side, not one after the other: each covers a blind
+spot of the others, and a new method can be added without changing the core. We first describe the core
+(Section~\ref{sec:core}), then the four methods (Sections~\ref{sec:method-a}--\ref{sec:method-d}).
 
-\begin{figure}[t]
-  \centering
-  \input{figures/overview}
-  \caption{Overview of \tool. \todo{What loops, what is expensive.}}
-  \label{fig:overview}
-\end{figure}
+\subsection{The Shared Core}
+\label{sec:core}
 
-\subsection{Step 1: \todo{Name}}
-\label{sec:step1}
-\todo{Text.}
+\paragraph{\circled{1} The engine judge.}
+\label{sec:judge}
+An LLM-written generator is run on DuckDB, and its quality is measured by the database, not reported by the LLM. For a
+generator with target switch $s$, the judge runs every query once with $s$ on and once with $s$ off and records:
+the \emph{valid rate} (queries DuckDB accepts); the \emph{reach rate} (Section~\ref{sec:background}); the number of
+distinct physical operator trees, read from \texttt{EXPLAIN (FORMAT JSON)}; and the number of distinct query
+\emph{skeletons}, that is, queries with identifiers and literals removed. A generator is rejected as \emph{low
+diversity} if any hard flag holds: fewer than $\max(30, 0.02 n)$ skeletons for $n$ valid queries; fewer than
+$\max(15, 0.03 c)$ operator trees for $c$ cases; a reach rate below 30\%; fewer than half of the valid queries taking
+part in the result comparison; or a rule target without a marker function. For a rule target, reach must be
+\emph{rule-level}: the rule card names a function call that only this rule removes, and the call must disappear from
+the plan. A generator that names the rule but never gives it a bare column passes expression-level reach but fails
+rule-level reach (Section~\ref{sec:eval-judge}).
+
+\paragraph{\circled{2} Oracles.} Each query runs under five configurations: the default; the target switch off;
+\texttt{delim\_join\_as\_cte=false} (a rewrite new in 2.0); one thread; and \texttt{PRAGMA enable\_verification}, which
+makes DuckDB re-run each query in several internal ways. A \emph{config difference} is a result that differs from the
+default. An \emph{error difference} is an error raised in one configuration only; if only the optimized run fails, the
+optimizer turned a valid query into a failing one. Results are compared as multisets after normalizing values close to
+zero, and queries whose order is undefined are excluded. The generator contract requires unique sort keys, because ties
+under \texttt{ORDER BY} or \texttt{row\_number()} are the first source of false alarms.
+
+\paragraph{\circled{3} Triage.} Every hit, from any method, passes five automatic steps: (1) \emph{verify}: replay the
+script alone and in a fresh process, and drop it if the difference disappears; (2) \emph{registry}: compare the
+signature with our registry of known issues, which labels it a rediscovery, a sibling or new; (3) \emph{minimize}:
+greedy delta reduction over statements and then over rows of \texttt{VALUES} lists, keeping the same verdict;
+(4) \emph{main}: run the minimized script on the newest development build and drop it if it is fixed there; (5)
+\emph{search}: query GitHub for issues and pull requests with the same function, rule or error text. Hits where the
+optimizer only hides an error (the unoptimized run fails, the optimized one succeeds) are labelled low priority,
+because DuckDB accepts this behaviour.
+
+\paragraph{\circled{4} The person.} Triage writes a list of candidates with minimized reproducers. A team member reads
+each one, decides which side is right by reading the rule's code, and writes the issue. Nothing is filed
+automatically. We grouped siblings with one root cause into one issue.
+
+\subsection{Method A: Classic Fuzzing}
+\label{sec:method-a}
+
+Method A is generic, undirected fuzzing. It runs SQLsmith~\cite{sqlsmith} against an AddressSanitizer and
+UndefinedBehaviorSanitizer build of DuckDB, sweeps the 2{,}560 SQL scripts we extracted from DuckDB's own test suite
+under the five configurations, mutates them (boundary values, join swaps, nesting), and replays reproducers mined from
+closed upstream issues. It needs no LLM and no target. We keep it running as a baseline and as a safety net for memory
+errors, which the other methods do not look for.
+
+\subsection{Method B: Feature-Targeted Fuzzers}
+\label{sec:method-b}
+
+Method B aims at features that are new in DuckDB~2.0 and rarely appear in the upstream issue stream. Each fuzzer is
+hand-written for one feature and has its own oracle. The trigger fuzzer builds random trigger definitions and
+data-changing statement sequences and checks three things: the final table equals an emulation of the triggers in
+plain SQL, the result survives a restart, and no internal error occurs. Further fuzzers cover window functions with
+mixed types, join equivalences (a \texttt{NATURAL JOIN} against \texttt{INTERSECT ALL}), bottom-up query
+construction, and the new \texttt{delim\_join\_as\_cte} rewrite, which they compare on and off.
+
+\subsection{Method C: New-Code Hints and LLM-Written Generators}
+\label{sec:method-c}
+
+Method C points an LLM at code that is new or never executed. Its inputs are: (1) \emph{static hints}: 24{,}816
+branches, boundary constants and risky operations extracted from DuckDB's C++ with tree-sitter, of which 80.9\% are
+never executed by the seed corpus of 2{,}560 test scripts; (2) \emph{new-code hints}: the code that changed between
+DuckDB~1.5 and 2.0; (3) \emph{feature cards}: a short plain-language description of a new feature and its switches; and
+(4) \emph{fix dossiers}: the diff and test of a recent fix, so that the LLM can look for a variant the fix missed. The
+LLM writes a generator under a fixed contract (deterministic output, unique sort keys, a declared target switch), and
+the engine judge measures it. A one-command, resumable 12-hour run (\texttt{targeted\_run}) drives the loop and ends
+with an audit that recomputes every quality verdict from stored counts. We ran Method C with three models: a local
+1.5B-parameter model in a pilot, Gemini~2.5~Pro (run by a team member), and Claude in an interactive authoring arm.
+
+\subsection{Method D: The Rule-Targeted Loop}
+\label{sec:method-d}
+
+Method D directs the search at one optimizer rule at a time. It has four steps.
+
+\paragraph{Step 1: Rule cards.} For every rule file and optimizer pass, a script builds a \emph{rule card} from the
+source and the git history: (a) the commits since March 2026 that touched the file, the fixes among them, and the tests these fixes added (a fix usually covers only the reported case, and the next bug is often in the case next to it); (b)
+every early exit in the rule's \texttt{Apply} or \texttt{CanOptimize} function, that is, the exact conditions under
+which the rewrite fires; (c) every place where the rule builds or converts a value (bounds, folded constants, casts);
+and (d) its marker function and its switch. Cards are ranked by
+$\mathit{score} = 2\min(\mathit{fixes},6) + \min(\mathit{commits},15) + 3\min(\mathit{sites},10) + 15[\mathit{rule}] +
+5[\mathit{marker}]$, which favours expression rules that build values and were fixed recently. For DuckDB~2.0.0 the
+script builds 49 cards.
+
+\paragraph{Step 2: Hypothesis-first generation.} The LLM receives one card and reads the real DuckDB source with
+read-only tools (Read, Grep, Glob). Its working directory is an empty folder, so it never sees our issue drafts,
+our controls or earlier generators. It must state a bug hypothesis and the preconditions under which the rule fires
+(\texttt{META["hypothesis"]}, \texttt{META["preconditions"]}); the judge rejects a rule-targeted generator without
+them. The prompt gives three recipes that worked for us: take constants from the generated rows (so that \texttt{=}
+can match) and from a list of 275 literals at the limits of 30 types (type maxima, $-0.0$, infinity, extreme dates);
+place the target pattern in varied contexts (\texttt{WHERE}, \texttt{SELECT}, \texttt{CASE}, \texttt{FILTER},
+\texttt{JOIN ON}, subqueries); and keep queries deterministic.
+
+\paragraph{Step 3: Judge and repair.} The judge runs the generator on 300 cases. Its measured feedback (valid rate,
+reach rate, the most common errors, queries that reached the target and queries that did not) becomes the prompt of the
+next round. Round 1 of a target uses a larger model (Claude Opus), and repair rounds use a smaller one (Claude Sonnet).
+A target retires after three rounds. A generator that the judge accepts and that produced hits is re-run at scale
+(1{,}500 cases).
+
+\paragraph{Step 4: Triage of every hit.} All hits go to the shared triage, including hits of generators the judge
+rejected. We made this choice after we saw that narrow, deep generators find bugs but have few plan shapes
+(Section~\ref{sec:eval-judge}). The judge therefore decides what counts as tested coverage, and triage decides what
+counts as a bug.
+
+\paragraph{Running unattended.} The loop keeps a ledger of targets, rounds and candidates, so a stopped run resumes
+where it stopped. A failed LLM call is not counted, the loop backs off, and after four failures in a row (for example a
+usage limit) it stops cleanly without retiring targets. A supervisor restarts it after a crash. Before every unit it
+checks free memory and pauses below 1.5\,GB, and it keeps the laptop awake while it runs.
+
+\paragraph{Why not let the LLM write queries directly?} A generator is a program: one LLM call yields hundreds of
+different queries, and the judge can measure the program instead of trusting a handful of examples. In our runs one call
+produced 300 to 1{,}500 test cases.

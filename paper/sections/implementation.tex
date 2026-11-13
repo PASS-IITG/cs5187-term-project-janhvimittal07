@@ -1,6 +1,12 @@
 \section{Implementation}
-\label{sec:impl}
-%% Optional. Language, size (lines of code, number of modules), what it
-%% depends on (versions), how it is tested (unit tests, a hand-counted
-%% fixture). Pitfalls met while building it are worth a short paragraph each.
-\todo{Implementation.}
+\label{sec:implementation}
+
+\tool is about 11{,}000 lines of Python in \texttt{src/harness}, plus a C++ driver that runs SQL in-process on the
+sanitizer build. The main parts are: \texttt{gen\_runner.py} (the engine judge and the five-configuration oracle),
+\texttt{verify\_finding.py} and \texttt{gen\_triage.py} (triage), \texttt{known\_issues.json} (the registry),
+\texttt{rule\_targets.py} (rule cards), \texttt{edge\_values.py} (the 275 type-limit literals),
+\texttt{hunt\_loop.py} with \texttt{hunt\_start.sh} (the unattended loop of Method D), \texttt{targeted\_run.py}
+(Method C), and the fuzzers of Methods A and B. The LLM in Method D is Claude Code in headless mode
+(\texttt{claude -p}) with only the Read, Grep and Glob tools allowed. Every prompt and response is stored.
+\texttt{controls/check\_controls.py} runs the positive and negative controls after every change to the judge or the
+triage. All runs pin the time zone to UTC, because DuckDB's default time zone follows the process environment.

@@ -1,0 +1,123 @@
+{
+ "snapshot": "2026-11-13 08:45 UTC",
+ "issues": 16,
+ "by_method": {
+  "A": 0,
+  "B": 1,
+  "C": 3,
+  "D-i": 5,
+  "D-a": 7
+ },
+ "by_kind": {
+  "wrong": 8,
+  "internal": 5,
+  "error": 3
+ },
+ "fixed_upstream": [
+  27759,
+  27850,
+  28052,
+  28562
+ ],
+ "open_with_fix_pr": [
+  27904,
+  28527,
+  28531,
+  28532,
+  28535,
+  28536,
+  28541,
+  28559,
+  28566
+ ],
+ "reproduced_label": [
+  27759,
+  27850,
+  27904,
+  28527,
+  28532,
+  28535,
+  28541,
+  28559,
+  28562,
+  28565,
+  28566
+ ],
+ "filed_by_team_member_niket": [
+  27904
+ ],
+ "hunt1": {
+  "llm_calls": 40,
+  "targets": 13,
+  "units": 32,
+  "units_quality_ok": 23,
+  "units_with_hits": 19,
+  "median_valid_pct": 95,
+  "candidates": 9,
+  "candidate_targets": [
+   "comparison_simplification",
+   "empty_needle_removal",
+   "move_constants",
+   "remove_unused_columns",
+   "topn_window_elimination"
+  ],
+  "issues_filed": [
+   28541,
+   28542,
+   28559,
+   28562,
+   28565,
+   28566
+  ]
+ },
+ "controls": {
+  "cheat_rule_reach": {
+   "quality": "LOW DIVERSITY - NOT A REAL TEST",
+   "reach_rate": 0.0,
+   "expr_reach_rate": 0.226,
+   "valid_rate": 1.0,
+   "hits_unique": 0
+  },
+  "control_date_trunc": {
+   "quality": "ok",
+   "reach_rate": 0.326,
+   "expr_reach_rate": 0.546,
+   "valid_rate": 0.883,
+   "hits_unique": 8
+  },
+  "control_rule_arith_constants": {
+   "quality": "LOW DIVERSITY - NOT A REAL TEST",
+   "reach_rate": 0.588,
+   "expr_reach_rate": 0.588,
+   "valid_rate": 0.807,
+   "hits_unique": 8
+  },
+  "control_rule_cast_comparison": {
+   "quality": "LOW DIVERSITY - NOT A REAL TEST",
+   "reach_rate": 0.108,
+   "expr_reach_rate": 0.403,
+   "valid_rate": 0.845,
+   "hits_unique": 12
+  },
+  "control_rule_date_trunc_edges": {
+   "quality": "LOW DIVERSITY - NOT A REAL TEST",
+   "reach_rate": 0.217,
+   "expr_reach_rate": 0.562,
+   "valid_rate": 0.756,
+   "hits_unique": 6
+  },
+  "control_rule_timestamp_cast_date": {
+   "quality": "LOW DIVERSITY - NOT A REAL TEST",
+   "reach_rate": 0.347,
+   "expr_reach_rate": 0.576,
+   "valid_rate": 0.781,
+   "hits_unique": 2
+  }
+ },
+ "round2_final_summary_valid_queries": "122,590",
+ "sqlsmith": {
+  "Queries Executed": "70,980",
+  "Semantically Valid": "65,492",
+  "Raw Anomalies Caught": "46"
+ }
+}

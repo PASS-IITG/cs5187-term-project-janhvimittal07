@@ -1,16 +1,22 @@
 \section*{Data Availability}
 \label{sec:data}
-%% Most SE venues require this (ISEC: "Artifact Availability"; FSE/ICSE:
-%% "Data Availability", after the Conclusion). While anonymous: export
-%% WITHOUT git history, scrub absolute paths (/Users/<name>/...) from JSON
-%% and logs, use an anonymous mirror (anonymous.4open.science).
-The replication package is available at \todo{anonymous URL}. It contains
-\todo{source of \tool with tests, subject list with exact commits, scripts,
-raw data, container definition}.
+
+All code, generators, controls, run logs and the scripts that produce every number in this paper are in our repository,
+\url{https://github.com/PASS-IITG/cs5187-term-project-janhvimittal07}. \texttt{src/README.md} explains how to build the
+DuckDB versions we used and how to rerun each method; \texttt{paper/scripts/collect\_data.py} regenerates
+\texttt{paper/data} and Tables~\ref{tab:issues} and~\ref{tab:hunt1}. Each upstream issue in Table~\ref{tab:issues}
+contains its minimized reproducer.
+
+\section*{Author Contributions}
+Prabhnoor Singh designed and built the LLM pipeline, the engine judge, the triage, Methods B and D and the unattended
+loop, ran most experiments, filed 15 of the 16 issues and wrote fix pull request \#28547. Niket Garg built the execution
+harness, the differential oracles, the first triage and the pinned development builds, and found and filed \#27904.
+Janhvi Mittal built the static hint extraction, the coverage tooling, the schema and data generator and the seed
+extraction, and ran Round~2 of Method C. All authors reviewed the paper.
 
 \section*{Use of Generative AI}
-%% ACM/IEEE authorship policies require disclosure. Confirm every word.
-\todo{Confirm and finalise.} A generative AI assistant (\todo{name, version})
-was used to \todo{what}. The authors checked every statement, every citation
-and every number. All numbers reported here were produced by running the
-tool and scripts.
+LLMs are part of the method: Claude (Anthropic) and Gemini~2.5~Pro (Google) wrote the test generators of Methods C and
+D, as described in Section~\ref{sec:approach}. In addition, substantial parts of the code in \texttt{src/harness}, the
+issue drafts and the text of this paper were written with the help of Claude under the direction of the authors. The
+authors checked every reproducer on the stated builds before filing, read every reported result, and take
+responsibility for the content.

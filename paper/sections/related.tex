@@ -1,16 +1,27 @@
 \section{Related Work}
 \label{sec:related}
-%% One \paragraph{Topic.} per line of work, closest first ("Closest to us is
-%% the work of ..."). Summarise each work in one sentence with its citation.
-%% END EVERY PARAGRAPH with how we differ: "We share their goal, but ...",
-%% "These methods ..., but only for ... We aim at ...".
-%% Cite own prior work in the third person while anonymous.
-\focus{\textbf{Related work.} Group prior work by topic, closest to your
-  project first. One \texttt{\textbackslash paragraph\{Topic.\}} per line of
-  work, each summarised in one or two sentences with a \emph{verified}
-  citation. \textbf{End every paragraph with how you differ} (``We share
-  their goal, but \ldots''). Do not just list papers --- position yours
-  against them. Fabricated citations are not accepted.}
 
-\paragraph{\todo{Closest topic}.} Closest to us is \todo{}. We share their
-goal, but \todo{difference}.
+\paragraph{Logic-bug oracles for databases.} Pivoted Query Synthesis~\cite{rigger2020pqs}, TLP~\cite{rigger2020tlp} and
+NoREC~\cite{rigger2020norec} construct queries whose results are known to be related and found many logic bugs in
+SQLite, MySQL and PostgreSQL. Query Plan Guidance~\cite{ba2023qpg} steers generation toward new query plans, and
+CERT~\cite{ba2024cert} finds performance issues through cardinality estimates. These oracles are generic: they apply to
+any query. We use the simplest differential oracle, switch on against switch off, and spend our effort on
+\emph{which} queries to run: queries that reach one named rule, written for that rule.
+
+\paragraph{Grammar- and coverage-based SQL fuzzing.} RAGS~\cite{slutz1998rags} introduced massive stochastic testing
+of SQL, SQLsmith~\cite{sqlsmith} generates random valid queries from a database's schema, and
+Squirrel~\cite{zhong2020squirrel} mutates an intermediate representation with coverage feedback to keep queries valid.
+They search broadly and find crashes in frequently executed code. Our Method A uses SQLsmith as a baseline. Unlike
+these tools, Method D aims at one optimizer rule at a time and verifies that the rule fired.
+
+\paragraph{LLM-based fuzzing.} Fuzz4All~\cite{xia2024fuzz4all} uses an LLM as a general input generator for many
+languages. WhiteFox~\cite{yang2024whitefox} lets an LLM summarize compiler optimization source code into requirements
+and then write tests, with feedback from tests that triggered the optimization. CovRL~\cite{eom2024covrl} rewards LLM
+mutations by rare coverage. Our Method D is closest to WhiteFox, but differs in three ways: the LLM writes generator
+programs rather than single tests, it must state a hypothesis about a value the rule builds, and the database, not the
+LLM, decides whether a rule fired (rule-level reach). We also mine targets from fix history, not only from the current
+source.
+
+\paragraph{Directed fuzzing.} AFLGo~\cite{bohme2017aflgo} directs greybox fuzzing toward target locations by distance
+in the call and control-flow graphs. We direct at the level of a rewrite rule and use the plan change as a cheap,
+exact signal that the target was reached, which needs no graph distance and no instrumented build.

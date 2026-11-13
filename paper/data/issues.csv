@@ -1,0 +1,17 @@
+issue,method,kind,title,state,reason,filed,author,labels,prs,fixed_by
+27759,B,internal,FOR EACH ROW trigger into a table with a BEFORE INSERT trigger,closed,completed,2026-10-23,prabh1512,reproduced,370:open;27839:open;28623:merged;28698:merged,28698
+27850,C,internal,identical EXISTS blocks under UNION ALL (delim_join_as_cte=false),closed,completed,2026-10-25,prabh1512,reproduced,,
+27904,C,internal,CROSS JOIN LATERAL with a nested LATERAL count(*),open,,2026-10-26,niketgarg6-sudo,reproduced,27975:open,
+28052,C,wrong,negated DOUBLE compared with a NaN constant,closed,completed,2026-10-29,prabh1512,needs triage,28071:merged,28071
+28527,D-i,wrong,date_trunc with a sub-day part on a DATE column,open,,2026-11-07,prabh1512,reproduced,28528:open,
+28531,D-i,error,CAST(timestamp AS DATE) = date at the TIMESTAMP range limits,open,,2026-11-07,prabh1512,needs triage,28547:open,
+28532,D-i,internal,TIMESTAMP_MS to TIMESTAMP_S cast at range end invalidates the database,open,,2026-11-07,prabh1512,reproduced,28539:open,
+28534,D-i,error,date_trunc comparison near the end of the TIMESTAMP range,open,,2026-11-07,prabh1512,needs triage,,
+28535,D-i,internal,UBIGINT constant above BIGINT max in x + c1 = c2,open,,2026-11-07,prabh1512,reproduced,28540:open;28549:open,
+28536,D-a,wrong,regex empty group (?:) at the pattern edge treated as an anchor,open,,2026-11-07,prabh1512,needs triage,28538:open,
+28541,D-a,wrong,UHUGEINT constant above HUGEINT max wraps in x + c1 = c2,open,,2026-11-08,prabh1512,reproduced,28540:open;28549:open,
+28542,D-a,wrong,TRY_CAST(date AS TIMESTAMP) comparison returns false instead of NULL,open,,2026-11-08,prabh1512,needs triage,,
+28559,D-a,wrong,top-N window elimination returns the other join side for 0.0 / -0.0,open,,2026-11-08,prabh1512,reproduced,28666:open;28728:open,
+28562,D-a,wrong,"contains(list, '') returns true for lists without an empty string",closed,completed,2026-11-08,prabh1512,reproduced,28563:merged;28712:closed,28563
+28565,D-a,error,CASE guard around a STRUCT field cast ignored,open,,2026-11-09,prabh1512,reproduced,,
+28566,D-a,wrong,both sides of a DOUBLE[] join key merged for [0.0] and [-0.0],open,,2026-11-09,prabh1512,reproduced,28728:open,

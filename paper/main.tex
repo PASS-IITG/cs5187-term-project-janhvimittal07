@@ -1,5 +1,5 @@
 %% FSE (CS-5187 Term Project) research paper. Requirements from the CFP (https://conf.researchr.org/home/fse-2026, checked 2026-09-30):
-%%   * \documentclass[acmsmall,screen,review,anonymous]{acmart}; single column
+%%   * \documentclass[acmsmall,screen]{acmart}; single column
 %%   * 12 pages of text and figures + references limit \todo{check}
 %%   * double-anonymous: no names, no identifying URLs, third-person
 %%     self-citation, no acknowledgments at submission
@@ -7,7 +7,7 @@
 %%   * disclose AI tools; fabricated citations = desk reject
 %%   * deadline: TODO (see course page) AoE, TODO
 %% Used for e.g. FSE, ISSTA, OOPSLA/PACMPL, TOSEM.
-\documentclass[acmsmall,screen,review,anonymous]{acmart}
+\documentclass[acmsmall,screen]{acmart}
 
 \input{macros}
 
@@ -18,13 +18,17 @@
 
 \begin{document}
 
-\title[Short Hook]{Short Hook: Plain Description of What Your Project Does and For Whom}
+\title[LLM-Directed Fuzzing of DuckDB]{Semantic LLM-Directed Fuzzing of DuckDB: Four Methods, One Judge, and 16 Upstream Bugs}
 %% Title pattern: "Short Hook: Plain Description of What and For Whom".
 %% Alternative titles (keep 2-3 here until submission):
 %%   "..."
 
-\author{Anonymous Author(s)}
-\affiliation{\institution{Anonymous Institution}\country{Anonymous Country}}
+\author{Prabhnoor Singh}
+\affiliation{\institution{IIT Guwahati}\city{Guwahati}\country{India}}
+\author{Niket Garg}
+\affiliation{\institution{IIT Guwahati}\city{Guwahati}\country{India}}
+\author{Janhvi Mittal}
+\affiliation{\institution{IIT Guwahati}\city{Guwahati}\country{India}}
 
 \begin{abstract}
 \input{sections/abstract}
@@ -43,25 +47,23 @@
 \begin{CCSXML}
 <ccs2012>
   <concept>
-    <concept_id>10011007.10011074</concept_id>
-    <concept_desc>Software and its engineering</concept_desc>
+    <concept_id>10011007.10011074.10011099.10011102.10011103</concept_id>
+    <concept_desc>Software and its engineering~Software testing and debugging</concept_desc>
     <concept_significance>500</concept_significance>
   </concept>
 </ccs2012>
 \end{CCSXML}
-\ccsdesc[500]{Software and its engineering}
+\ccsdesc[500]{Software and its engineering~Software testing and debugging}
 
-\keywords{\todo{5--8 keywords for your topic (e.g. static analysis, testing,
-  fuzzing, empirical study, program repair, refactoring, build systems)}}
+\keywords{fuzzing, database testing, query optimizer, differential testing, large language models, DuckDB}
 
 \maketitle
 
 \input{sections/introduction}
 \input{sections/background}
-%\input{sections/pilot}          % optional: "A First Look" before the tool
-\input{sections/problem}
+
 \input{sections/approach}
-%\input{sections/implementation} % optional
+\input{sections/implementation}
 \input{sections/evaluation}
 \input{sections/discussion}
 \input{sections/threats}         % or merge into discussion to save space
