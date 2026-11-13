@@ -1,0 +1,79 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [],
+ "distinct_templates": 4844,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "a2f5569bdc2714579c4935ac757c6bf0c1233e8c92f1cacbc5fb01140b4261b5",
+ "target_key": "{\"optimizer\": \"grouping_sets\"}",
+ "comparable_rate": 1.0,
+ "reach_tree_rate": 0.955,
+ "queries_per_case": {
+  "4": 433,
+  "5": 452,
+  "6": 434,
+  "7": 413,
+  "8": 427,
+  "9": 424,
+  "10": 417
+ },
+ "generator": "/home/cse/cs5187/generators/grouping_sets.py",
+ "name": "grouping_sets",
+ "target": {
+  "optimizer": "grouping_sets"
+ },
+ "n_cases": 3000,
+ "generator_errors": {},
+ "cases_run": 3000,
+ "setup_ok": 3000,
+ "queries": 20889,
+ "valid_queries": 18358,
+ "valid_rate": 0.879,
+ "reach_queries": 17535,
+ "reach_rate": 0.955,
+ "distinct_plan_signatures": 3250,
+ "hits_total": 0,
+ "hits_unique": 0,
+ "hit_kinds": {},
+ "worker_problems": [],
+ "top_errors": [
+  [
+   "BinderException: Binder Error: column \"d\" must appear in the GROUP BY clause or must be part of an aggregate f",
+   619
+  ],
+  [
+   "BinderException: Binder Error: column \"c\" must appear in the GROUP BY clause or must be part of an aggregate f",
+   618
+  ],
+  [
+   "BinderException: Binder Error: column \"b\" must appear in the GROUP BY clause or must be part of an aggregate f",
+   582
+  ],
+  [
+   "BinderException: Binder Error: column \"a\" must appear in the GROUP BY clause or must be part of an aggregate f",
+   523
+  ],
+  [
+   "BinderException: Binder Error: GROUPING statement cannot be used without groups LINE N: SELECT a, grouping(a),",
+   9
+  ],
+  [
+   "BinderException: Binder Error: GROUPING statement cannot be used without groups LINE N: SELECT a, grouping(a) ",
+   4
+  ]
+ ],
+ "examples": {
+  "reach": [
+   "SELECT count(*), sum(x) FROM (SELECT a, count(*) AS x FROM t GROUP BY ROLLUP (a)) s",
+   "SELECT b, d, c, min(e), max(a), avg(e) FROM t WHERE a > 2 GROUP BY GROUPING SETS ((b, c, d), ()) HAVING count(*) > 1"
+  ],
+  "miss": [
+   "SELECT count(*), sum(x) FROM (SELECT b, a, c, count(*) AS x FROM t GROUP BY GROUPING SETS ((a, b, c))) s",
+   "SELECT b, min(e), sum(e), max(a) FROM t GROUP BY GROUPING SETS ((b)) HAVING count(*) > 1"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-25 22:24:28",
+ "devcheck": "2.0.0"
+}

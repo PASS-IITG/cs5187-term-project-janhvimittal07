@@ -1,0 +1,58 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 14556,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "85b2bb07bf4c094695332019c0eac0cb9484dbc4c64381039b97f74a0c587f75",
+ "target_key": "{\"optimizer\": \"distinct_aggregate_rewrite\"}",
+ "comparable_rate": 1.0,
+ "reach_tree_rate": 0.904,
+ "queries_per_case": {
+  "6": 433,
+  "7": 437,
+  "8": 407,
+  "9": 447,
+  "10": 437,
+  "11": 454,
+  "12": 435
+ },
+ "generator": "/home/cse/cs5187/generators/distinct_aggregate_rewrite.py",
+ "name": "distinct_aggregate_rewrite",
+ "target": {
+  "optimizer": "distinct_aggregate_rewrite"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 27520,
+ "valid_queries": 27520,
+ "valid_rate": 1.0,
+ "reach_queries": 24874,
+ "reach_rate": 0.904,
+ "distinct_plan_signatures": 1991,
+ "hits_total": 2247,
+ "hits_unique": 305,
+ "hit_kinds": {
+  "config_diff": 305
+ },
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT b, a, count(DISTINCT b) FROM t GROUP BY b, a HAVING count(*) > 1 ORDER BY ALL",
+   "SELECT * FROM (SELECT sum(DISTINCT d), max(DISTINCT b), sum(DISTINCT e), min(a) FROM t) s WHERE 1=1 ORDER BY ALL LIMIT 16"
+  ],
+  "miss": [
+   "SELECT a, c, max(DISTINCT b) FROM t GROUP BY a, c ORDER BY ALL",
+   "SELECT count(*), max(m) FROM (SELECT c, d, max(DISTINCT b), count(*) AS m FROM t GROUP BY c, d) s"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-27 17:21:37",
+ "devcheck": "2.0.0"
+}

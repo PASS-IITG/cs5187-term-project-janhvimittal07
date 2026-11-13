@@ -1,0 +1,2 @@
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "plain", "sql": null}
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "verify", "sql": null}

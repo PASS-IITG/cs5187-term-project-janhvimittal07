@@ -1,0 +1,53 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes",
+  "every case has exactly 1 queries (fine only if the queries themselves vary structurally)"
+ ],
+ "distinct_templates": 1058,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "69d464f8b1b1040242803fe31258f8c59035b53e69a631b52bc79b4042e837a6",
+ "target_key": "{\"optimizer\": \"projection_pullup\"}",
+ "comparable_rate": 0.881,
+ "reach_tree_rate": 0.589,
+ "queries_per_case": {
+  "1": 3050
+ },
+ "generator": "/home/cse/cs5187/generators/projection_pullup.py",
+ "name": "projection_pullup",
+ "target": {
+  "optimizer": "projection_pullup"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 3050,
+ "valid_queries": 3050,
+ "valid_rate": 1.0,
+ "reach_queries": 1799,
+ "reach_rate": 0.59,
+ "distinct_plan_signatures": 176,
+ "hits_total": 121,
+ "hits_unique": 6,
+ "hit_kinds": {
+  "config_diff": 6
+ },
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "WITH q AS (SELECT t2.a, j.b FROM t2 JOIN (SELECT x_838.a AS a, y_252.b AS b FROM t3 x_838 JOIN t2 y_252 ON x_838.a = y_252.a) j ON t2.a = j.a) SELECT * FROM q WHERE 1=1 ORDER BY ALL",
+   "SELECT sum(1) FROM (SELECT j.a, j.b, t1.c FROM (SELECT x_941.a AS a, y_722.b AS b FROM t2 x_941 INNER JOIN t3 y_722 ON x_941.a = y_722.a) j JOIN t1 ON j.a = t1.a) s"
+  ],
+  "miss": [
+   "SELECT count(*), max(1) FROM (SELECT j1.a, j2.b FROM (SELECT x_668.a AS a, y_915.b AS b FROM t2 x_668 JOIN t2 y_915 ON x_668.a = y_915.a) j1 CROSS JOIN t3 j2 WHERE j1.a < 3 AND j2.a < 3) s",
+   "SELECT sum(x) FROM (SELECT count(*) AS x FROM (SELECT j.a, count(*), sum(j.b) AS sb FROM (SELECT x_262.a AS a, y_218.b AS b FROM t4 x_262 LEFT JOIN t3 y_218 ON x_262.a = y_218.a) j GROUP BY j.a) s) sub"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-29 18:08:04",
+ "devcheck": "2.0.0"
+}

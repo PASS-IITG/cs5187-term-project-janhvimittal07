@@ -1,0 +1,7 @@
+DuckDB 2.0.0: 7901 distinct window queries
+[plain None] crash      worker died rc=-11  [no case to replay]
+... plain pass done 276s
+[verify None] crash      worker died rc=-11  [no case to replay]
+[verify 1360] crash      worker died rc=-11  [NOT reproducible alone]
+[verify None] crash      worker died rc=1 See also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads [no case to replay]
+[verify None] crash      worker died rc=127 cannot allocate memory for thread-local data: ABORT [no case to replay]

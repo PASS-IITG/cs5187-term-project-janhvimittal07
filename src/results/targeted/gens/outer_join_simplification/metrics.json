@@ -1,0 +1,53 @@
+{
+ "quality": "ok",
+ "quality_flags": [],
+ "quality_warnings": [
+  "100% of queries are valid: a real generator hits some binder errors on unusual shapes"
+ ],
+ "distinct_templates": 256,
+ "author_model": "Gemini 2.5 Pro (Antigravity)",
+ "generator_sha256": "b14164b6f42aa06be68864834b688ce8fd9aa76d2b39c131c05fa0b052fb9a93",
+ "target_key": "{\"optimizer\": \"outer_join_simplification\"}",
+ "comparable_rate": 0.934,
+ "reach_tree_rate": 0.576,
+ "queries_per_case": {
+  "1": 1509,
+  "2": 1541
+ },
+ "generator": "/home/cse/cs5187/generators/outer_join_simplification.py",
+ "name": "outer_join_simplification",
+ "target": {
+  "optimizer": "outer_join_simplification"
+ },
+ "n_cases": 3050,
+ "generator_errors": {},
+ "cases_run": 3050,
+ "setup_ok": 3050,
+ "queries": 4591,
+ "valid_queries": 4591,
+ "valid_rate": 1.0,
+ "reach_queries": 3764,
+ "reach_rate": 0.82,
+ "distinct_plan_signatures": 227,
+ "hits_total": 22,
+ "hits_unique": 6,
+ "hit_kinds": {
+  "config_diff": 6
+ },
+ "worker_problems": [],
+ "top_errors": [],
+ "examples": {
+  "reach": [
+   "SELECT count(DISTINCT a1), min(c2) FROM (SELECT t3.a AS a1, t3.b AS b1, t1.a AS a2, t1.c AS c2 FROM t3 FULL OUTER JOIN t1 ON t3.a = t1.a AND t3.b = t1.b WHERE t1.a <= 1) s",
+   "SELECT s.*, row_number() OVER (ORDER BY 1) FROM (SELECT t1.a AS a1, t1.b AS b1, t2.a AS a2, t2.c AS c2 FROM t1 FULL OUTER JOIN t2 ON t1.a = t2.a WHERE t2.a <> 5) s ORDER BY ALL"
+  ],
+  "miss": [
+   "SELECT * FROM (SELECT t2.a AS a1, t2.b AS b1, t3.a AS a2, t3.c AS c2 FROM t2 FULL OUTER JOIN t3 ON t2.a = t3.a AND t2.b = t3.b WHERE t3.a >= 4) s WHERE 1=1 LIMIT 9 OFFSET 1",
+   "SELECT a1, sum(b1) FROM (SELECT t4.a AS a1, t4.b AS b1, t1.a AS a2, t1.c AS c2 FROM t4 FULL OUTER JOIN t1 ON t4.a = t1.a WHERE t1.a >= 5) s GROUP BY a1 ORDER BY ALL"
+  ]
+ },
+ "has_switch": true,
+ "seed": 42,
+ "finished": "2026-10-28 16:16:39",
+ "devcheck": "2.0.0"
+}

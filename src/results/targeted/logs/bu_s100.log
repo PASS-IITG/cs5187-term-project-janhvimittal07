@@ -1,0 +1,3 @@
+DuckDB 2.0.0: 150 distinct queries
+[None] crash      worker died rc=-11  [no case to replay]
+done in 7s: 1 unique signatures

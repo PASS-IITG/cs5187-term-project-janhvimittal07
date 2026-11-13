@@ -1,0 +1,4 @@
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "plain", "sql": null}
+{"id": null, "kind": "crash", "detail": "worker died rc=1 See also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads [no case to replay]", "mode": "plain", "sql": null}
+{"id": null, "kind": "crash", "detail": "worker died rc=-11  [no case to replay]", "mode": "verify", "sql": null}
+{"id": 3050, "kind": "crash", "detail": "worker died rc=-11  [NOT reproducible alone]", "mode": "verify", "sql": "SELECT * FROM (SELECT nth_value(tiny, 9223372036854775807 RESPECT NULLS) OVER (PARTITION BY b ORDER BY ts, k ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE TIES) FROM w) ORDER BY ALL"}

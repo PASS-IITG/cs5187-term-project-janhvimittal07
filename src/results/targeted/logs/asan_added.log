@@ -1,0 +1,3 @@
+789 scripts from /home/cse/.gemini/antigravity/scratch/termproject/src/corpus/seeds-v200-added -> 1578 replays
+resuming after 1578 queries
+finished: 1578 queries in 0s: {'runtime_error': 238, 'ok': 1056, 'binder_error': 251, 'parse_error': 22, 'internal_error': 2, 'dup:internal_error': 1, 'crash': 2, 'dup:crash': 1, 'timeout': 7}

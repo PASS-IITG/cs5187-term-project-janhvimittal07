@@ -1,0 +1,5 @@
+DuckDB 2.0.0: 3000 trigger cases
+... plain pass done 694s
+... verify pass done 1329s
+oracle coverage: {'cases': 6000, 'emu_eligible': 896, 'emu_checked': 896, 'emu_exception': 0, 'persist_checked': 6000, 'triggers_created': 11960, 'trigger_fired_rows': 8834}
+done in 1329s: 0 unique signatures {}
