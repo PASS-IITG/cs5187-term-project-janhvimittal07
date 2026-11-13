@@ -7,6 +7,6 @@ sanitizer build. The main parts are: \texttt{gen\_runner.py} (the engine judge a
 \texttt{rule\_targets.py} (rule cards), \texttt{edge\_values.py} (the 275 type-limit literals),
 \texttt{hunt\_loop.py} with \texttt{hunt\_start.sh} (the unattended loop of Method D), \texttt{targeted\_run.py}
 (Method C), and the fuzzers of Methods A and B. The LLM in Method D is Claude Code in headless mode
-(\texttt{claude -p}) with only the Read, Grep and Glob tools allowed. Every prompt and response is stored.
+(\texttt{claude -p}) with only the Read, Grep and Glob tools allowed.
 \texttt{controls/check\_controls.py} runs the positive and negative controls after every change to the judge or the
 triage. All runs pin the time zone to UTC, because DuckDB's default time zone follows the process environment.

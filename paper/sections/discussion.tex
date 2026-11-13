@@ -22,7 +22,3 @@ oracles: TLP and NoREC can find bugs that are present with the switch both on an
 (release against development build) finds regressions directly. Rules that match operators such as \texttt{+} or
 \texttt{LIKE} have no marker function, so their reach is measured only at expression level. Measuring the coverage of
 the target file's lines would give a stronger signal for them. We leave these for future work.
-
-\paragraph{Other database engines.} Nothing in the core is specific to DuckDB except the switch names, the marker
-functions and the build scripts. For PostgreSQL, the \texttt{enable\_*} planner settings play the role of switches; for
-an engine that aims to be compatible with SQLite, SQLite itself is a ready-made differential oracle.
