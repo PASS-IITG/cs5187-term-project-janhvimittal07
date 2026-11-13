@@ -25,7 +25,7 @@ def slide(title,bullets=(),novel=False,size=20):
 s=p.slides.add_slide(B); bg=s.shapes.add_shape(MSO_SHAPE.RECTANGLE,0,0,p.slide_width,p.slide_height); bg.fill.solid(); bg.fill.fore_color.rgb=NAVY; bg.line.fill.background()
 box(s,0.8,2.0,11.7,1.5,"Semantic LLM-Directed Fuzzing of DuckDB",44,WHITE,True)
 box(s,0.8,3.5,11.7,1,"Finding silent wrong-answer bugs in a SQL optimizer",24,ACC)
-box(s,0.8,5.0,11.7,1.2,"Prabhnoor Singh · Niket Garg · Janhvi Mittal\nCS5187 Term Project · IIT Guwahati",20,WHITE)
+box(s,0.8,5.0,11.7,1.2,"Prabhnoor · Niket Garg · Janhvi Mittal\nCS5187 Term Project · IIT Guwahati",20,WHITE)
 slide("The problem",["Optimizer bugs give WRONG ANSWERS silently: no crash, no error, users trust the result",
  "Random SQL fuzzers rarely reach deep optimizer rules: the rule only fires under narrow conditions",
  "Rewrites fail at edge values: type limits, -0.0, infinity, extreme dates, out-of-range constants",
